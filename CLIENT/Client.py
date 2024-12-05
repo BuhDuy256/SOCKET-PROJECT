@@ -1,83 +1,99 @@
+import os
+import struct
 import socket
 import threading
-import time
 
-HEADER = 64
-PORT = 5050
-SERVER = "192.168.2.103"
-ADDRESS = (SERVER, PORT)
+HEADER_SIZE = 64
+PORT_NUMBER = 5050
+SERVER_IP = "172.20.10.2"
+SERVER_ADDRESS = (SERVER_IP, PORT_NUMBER)
 FORMAT = 'utf-8'
-START_MESSAGE = "BUHDUY"
+CONNECT_MESSAGE = "!CONNECT"
 DISCONNECT_MESSAGE = "!DISCONNECT"
 FILE_REQUESTED_DOWNLOAD_PATH = "input.txt"
 
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect(ADDRESS)
+client.connect(SERVER_ADDRESS)
 
-def send_msg(msg):
-    message = msg.encode(FORMAT)
-    msg_length = len(message)
-    send_length = str(msg_length).encode(FORMAT)
-    send_length += b' ' * (HEADER - len(send_length))
-    client.send(send_length)
-    client.send(message)
+def send_file(file_path):
+    try:
+        with open(file_path, "rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        send_message(f"ERROR: File '{file_path}' not found.")
+        return
+    except Exception as e:
+        send_message(f"ERROR: {str(e)}")
+        return
 
-def receive_msg():
-    msg_length = int(client.recv(HEADER).decode(FORMAT))
-    print(f"Message length: {msg_length} bytes")
-    msg = client.recv(1024).decode(FORMAT)
-    print(f"[SERVER RESPONSE]: {msg}")
-    return msg
+    file_name = os.path.basename(file_path).encode()
+    data_length = len(data)
 
-def receive_allow_dowload_file():
-    file_size = int(client.recv(HEADER).decode(FORMAT))
-    print(f"File size received: {file_size} bytes")
+    header = struct.pack("!B H I", 0x01, len(file_name), data_length)
+    header += file_name
 
-    file_data = b""
-    while len(file_data) < file_size:
-        chunk = client.recv(1024)
-        file_data += chunk
-        if len(file_data) == file_size:
-            break
-    print(f"Received file content:\n{file_data.decode(FORMAT)}")
+    padding = b'\x00' * (HEADER_SIZE - len(header))
+    header += padding
 
-def send_files_from_input():
-    with open(FILE_REQUESTED_DOWNLOAD_PATH, 'r') as file:
-        lines = file.readlines()
+    try:
+        client.sendall(header)
+        client.sendall(data)
+    except Exception as e:
+        send_message(f"ERROR: {str(e)}")
 
-    files = [line.strip() for line in lines if line.strip() and "done" not in line]
-    return files
+def send_message(message):
+    message_bytes = message.encode()
+    data_length = len(message_bytes)
 
-def mark_file_as_done_inputTxt(file_name):
-    with open(FILE_REQUESTED_DOWNLOAD_PATH, 'r') as file:
-        lines = file.readlines()
+    header = struct.pack("!B I", 0x02, data_length)
+    
+    padding = b'\x00' * (HEADER_SIZE - len(header))
+    header += padding
 
-    with open(FILE_REQUESTED_DOWNLOAD_PATH, 'w') as file:
-        for line in lines:
-            if line.strip() == file_name:
-                file.write(line.strip() + " done\n")
-            else:
-                file.write(line)
+    try:
+        client.sendall(header)
+        client.sendall(message_bytes)
+    except Exception as e:
+        print(f"[ERROR] Error sending message: {e}")
 
-def request_files_from_inputTxt():
-    while True:
-        files = send_files_from_input()
-        if not files:
-            print("No more files to request.")
-            return
-        for file_name in files:
-            print(f"Requesting file: {file_name}")
-            send_msg(file_name)
-            response = receive_msg()
-            if response == file_name:
-                print(f"File {file_name} has been received successfully.")
-                mark_file_as_done_inputTxt(file_name)
-            else:
-                print(f"Failed to receive file {file_name}. Server response: {response}")
-        time.sleep(5)
+def handle_server():
+    header = client.recv(HEADER_SIZE)
+    if not header:
+        print("[ERROR] No header received. Closing connection.")
+        client.close()
+        return
 
-send_msg(START_MESSAGE)
-receive_allow_dowload_file()
-receive_msg()
-request_files_from_inputTxt()
-send_msg(DISCONNECT_MESSAGE)
+    header_type = header[0]
+    
+    if header_type == 0x01:
+        filename_length, data_length = struct.unpack("!H I", header[1:7])
+        filename = header[7:7 + filename_length].decode()
+        
+        remaining_data = data_length
+        file_data = b""
+        
+        while remaining_data > 0:
+            chunk = client.recv(min(remaining_data, 4096))
+            if not chunk:
+                break
+            file_data += chunk
+            remaining_data -= len(chunk)
+        
+        if file_data:
+            print(f"[FILE RECEIVED] Filename: {filename}")
+            decoded_content = file_data.decode(FORMAT)
+            print(f"[FILE DATA]\n{decoded_content}")
+        else:
+            print("[ERROR] No data received for the file.")
+
+    elif header_type == 0x02:
+        data_length = struct.unpack("!I", header[1:5])[0]
+        
+        message = client.recv(data_length).decode()
+        print(f"[SERVER] {message}")
+    else:
+        send_message("ERROR: Unknown header type.")
+
+send_message(CONNECT_MESSAGE)
+handle_server()
+send_message(DISCONNECT_MESSAGE)
