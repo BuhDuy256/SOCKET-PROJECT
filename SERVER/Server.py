@@ -1,69 +1,117 @@
+import os
+import re
+import time
+import struct
 import socket
 import threading
 
-HEADER = 64
-PORT = 5050
-SERVER = socket.gethostbyname(socket.gethostname())
-ADDRESS = (SERVER, PORT)
+HEADER_SIZE = 64
+PORT_NUMBER = 5050
+SERVER_IP = socket.gethostbyname(socket.gethostname())
+SERVER_ADDRESS = (SERVER_IP, PORT_NUMBER)
 FORMAT = 'utf-8'
-START_MESSAGE = "BUHDUY"
+CONNECT_MESSAGE = "!CONNECT"
 DISCONNECT_MESSAGE = "!DISCONNECT"
 FILE_NAME = "allow_download.txt"
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind(ADDRESS)
+server.bind(SERVER_ADDRESS)
 
-def send(conn, msg):
-    message = msg.encode(FORMAT)
-    msg_length = len(message)
-    send_length = str(msg_length).encode(FORMAT)
-    send_length += b' ' * (HEADER - len(send_length))
-    conn.send(send_length)
-    conn.send(message)
-    
-def send_allow_dowload_file(conn, filename):
-    try:
-        with open(filename, 'rb') as file:
-            file_data = file.read()
-            file_size = len(file_data)
-            send(conn, str(file_size))
-            conn.send(file_data)
-            print(f"Sent {filename} to client.")
-    except Exception as e:
-        print(f"Error sending file: {e}")
-        send(conn, "ERROR: Could not send file.")
+def send_file(connection, file_path):
+    with open(file_path, "rb") as f:
+        data = f.read()
 
-def handle_client(conn, addr):
-    print(f"\n[NEW CONNECTION]: {addr} connected.")
+    file_name = file_path.encode()
+    data_length = len(data)
+
+    # Header: [type (1 byte), filename length (2 bytes), data length (4 bytes), filename (remaining)]
+    # The string "!B H I" is a format string used by Python's struct module to define how binary data is packed or unpacked.
+    header = struct.pack("!B H I", 0x01, len(file_name), data_length)
+    header += file_name  # Add the filename (variable length)
+    padding = b'\x00' * (HEADER_SIZE - len(header))  # Add padding to make header 64 bytes
+    header += padding
+
+    # Send header and data
+    connection.sendall(header)
+    connection.sendall(data)
+
+def send_message(connection, message):
+    message_bytes = message.encode()
+    data_length = len(message_bytes)
+
+    # Header: [type (1 byte), data length (4 bytes), padding]
+    header = struct.pack("!B I", 0x02, data_length)
+    header += b'\x00' * (HEADER_SIZE - len(header))
+
+    # Send header and data
+    connection.sendall(header)
+    connection.sendall(message_bytes)
+
+def handle_client(connection, addr):
+    print(f"[NEW CONNECTION] {addr} connected.")
+
     connected = True
     while connected:
-        msg_length = conn.recv(HEADER).decode(FORMAT)
-        if msg_length:
-            msg_length = int(msg_length)
-            msg = conn.recv(msg_length).decode(FORMAT)
+        # Read header
+        header = connection.recv(HEADER_SIZE)
+        if not header:
+            break
+        # Unpack header
+        header_type, filename_length, data_length = struct.unpack("!B H I", header[:7])
 
-            if msg == START_MESSAGE:
-                send_allow_dowload_file(conn, FILE_NAME)
-                send(conn, "READY TO RECEIVE FILE")
-                continue
-            elif msg == DISCONNECT_MESSAGE:
-                print(f"[DISCONNECTED]: {addr} disconnected.")
+        if header_type == 0x01:
+            # Read filename
+            filename = connection.recv(filename_length).decode()
+            # Read data
+            data = connection.recv(data_length)
+            # Write data to file
+            with open(filename, "wb") as f:
+                f.write(data)
+            print(f"[{addr}] File '{filename}' received.")
+
+        elif header_type == 0x02:
+            # Read data
+            message = connection.recv(data_length).decode()
+            print(f"[{addr}] {message}")
+            # Check message
+            if message == CONNECT_MESSAGE:
+                send_file(connection, FILE_NAME)
+            elif message == DISCONNECT_MESSAGE:
                 connected = False
-                return
+            elif message.startswith("DOWNLOAD"):
+                # Check if the message matches the format using regex
+                match = re.match(r"^DOWNLOAD (\S+) (\d+) (\d+)$", message)
+                if match:
+                    file_name = match.group(1)  # Extract the filename
+                    offset = int(match.group(2))  # Extract the offset
+                    chunk_size = int(match.group(3))  # Extract the chunk size
+
+                    print(f"[{addr}] DOWNLOAD request received: file={file_name}, offset={offset}, chunk_size={chunk_size}")
+
+                #     try:
+                #         # ... code to send the requested file chunk ...
+                #     except FileNotFoundError:
+                #         send_message(connection, f"ERROR: File '{file_name}' not found.")
+                #     except ValueError:
+                #         send_message(connection, "ERROR: Invalid offset or chunk size.")
+                #     except Exception as e:
+                #         send_message(connection, f"ERROR: {str(e)}")
+                # else:
+                #     send_message(connection, "ERROR: Invalid DOWNLOAD command format.")
             else:
-                print(f"Received message from {addr}: {msg}")
-                response = input("Reply: ")
-                send(conn, response)
-    conn.close()
+                send_message(connection, "ERROR: Invalid command.")
+                connected = False
+                                
+    connection.close()
 
-def start():
+def multithread_start():
     server.listen()
-    print(f"[LISTENING] on {SERVER}")
+    print(f"[LISTENING]: Server is listening on {SERVER_IP}")
+    
     while True:
-        print("[WAITING]")
-        conn, addr = server.accept()
-        thread = threading.Thread(target=handle_client, args=(conn, addr))
+        connection, addr = server.accept()
+        thread = threading.Thread(target = handle_client, args = (connection, addr))
         thread.start()
-        print(f"[NUMBER OF CONNECTION]: {threading.active_count() - 1}")
+        print(f"[ACTIVE CONNECTIONS]: {threading.active_count() - 1}")
 
-start()
+multithread_start()
