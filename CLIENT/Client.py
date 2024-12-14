@@ -6,7 +6,7 @@ import socket
 import threading
 import hashlib
 
-SERVER_IP = "192.168.2.101"
+SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 5050
 SERVER_ADDRESS = (SERVER_IP, SERVER_PORT)
 
@@ -21,13 +21,11 @@ BUFFER_SIZE = 1024
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client.connect(SERVER_ADDRESS)
 
-
 def send_message(connection, message):
 	message = message.encode(ENCODE_FORMAT)
 	header = f"{len(message):<{HEADER_SIZE}}".encode(ENCODE_FORMAT)
 	connection.send(header)
 	connection.send(message)
-
 
 def receive_message(connection):
 	header = connection.recv(HEADER_SIZE).decode(ENCODE_FORMAT)
@@ -36,7 +34,6 @@ def receive_message(connection):
 
 	message = connection.recv(int(header)).decode(ENCODE_FORMAT)
 	return message
-
 	
 def receive_downloaded_file_list():
     file_list = []
@@ -52,7 +49,13 @@ def receive_downloaded_file_list():
             if len(file_info) >= 2:
                 file_name = file_info[0]
                 file_size = " ".join(file_info[1:3])
-                file_list.append({"file_name": file_name, "file_size": file_size})
+                size_value, size_unit = file_size.split()
+
+                file_list.append({
+                    "file_name": file_name,
+                    "size_value": size_value,
+                    "size_unit": size_unit
+                })
 
     return file_list
 
@@ -63,8 +66,7 @@ def display_file_list(file_list):
         return
 
     for file in file_list:
-        print(f"{file['file_name']} {file['file_size']}")
-
+        print(f"{file['file_name']} {file['size_value']}{file['size_unit']}")
         
 if __name__ == "__main__":
     file_list = receive_downloaded_file_list()
