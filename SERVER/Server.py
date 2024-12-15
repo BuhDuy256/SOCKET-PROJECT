@@ -54,8 +54,8 @@ def send_downloaded_file_list(connection):
 def send_message(connection, message):
     message = message.encode(ENCODE_FORMAT)
     header = f"{len(message):<{HEADER_SIZE}}".encode(ENCODE_FORMAT)
-    connection.send(header)
-    connection.send(message)
+    connection.sendall(header)
+    connection.sendall(message)
 
 def receive_message(connection):
     header = connection.recv(HEADER_SIZE).decode(ENCODE_FORMAT)
@@ -68,30 +68,22 @@ def generate_checksum(data):
     return hashlib.md5(data).hexdigest()[:16]
 
 def send_chunk_file(connection, file_name, seq, chunk_size):
-    if not os.path.exists(file_name):
-        connection.send(b"SERVER RESPONSE::CHUNK FILE NOT FOUND")
-        return
-    with open(file_name, 'rb') as file:
-        file.seek(seq * chunk_size)
-        chunk_data = file.read(chunk_size)
-        if chunk_data:
+    print(f"Send chunk {seq} of {file_name} with size {chunk_size}")
+    try:
+        with open(file_name, "rb") as file:
+            file.seek(seq * chunk_size)
+            chunk_data = file.read(chunk_size)
+            print(len(chunk_data))
             checksum = generate_checksum(chunk_data)
-            header = struct.pack("!I I 16s", seq, chunk_size, checksum.encode('utf-8'))
-            padding = b'\x00' * (HEADER_SIZE - len(header))
-            header = header + padding
-            packet = header + chunk_data
-            connection.send(packet)
-            print(f"Sent chunk {seq} with size {chunk_size} and checksum {checksum}")
-            connection.settimeout(TIMEOUT)  
-            try:
-                ack = connection.recv(BUFFER_SIZE)
-                if ack.decode(ENCODE_FORMAT) == f"ACK {seq}":
-                    print(f"Received ACK for chunk {seq}")
-                else:
-                    print(f"Invalid ACK for chunk {seq}")
-            except socket.timeout:
-                print(f"Timeout waiting for ACK for chunk {seq}. Retrying...")
-                send_chunk_file(connection, file_name, seq, chunk_size)
+            header = struct.pack("!I I 16s", seq, len(chunk_data), checksum.encode(ENCODE_FORMAT))
+            header = header.ljust(HEADER_SIZE, b'\x00')  
+            connection.sendall(header)
+            connection.sendall(chunk_data)
+
+    except FileNotFoundError:
+        print(f"File {file_name} not found.")
+    except Exception as e:
+        print(f"[ERROR] Error sending chunk: {e}")
 
 
 def handle_client(connection, address):
@@ -100,6 +92,7 @@ def handle_client(connection, address):
     while connected:
         try:
             message = receive_message(connection)
+            print(f"Received message: {message}")
             if message == DISCONNECT_MESSAGE:
                 connected = False
                 connection.close()
@@ -111,6 +104,7 @@ def handle_client(connection, address):
                     file_name = match.group(1)
                     seq = int(match.group(2))
                     size = int(match.group(3))
+                    print(f"Received request to send chunk {seq} of {file_name} with size {size}")
                     send_chunk_file(connection, file_name, seq, size)
             else:
                 send_message(connection, "Invalid Command")

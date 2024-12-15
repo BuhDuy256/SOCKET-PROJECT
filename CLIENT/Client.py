@@ -1,12 +1,10 @@
 import os
 import socket
-import threading
 import hashlib
 import struct
 import time
 import sys
 import signal
-import re
 
 SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 5050
@@ -18,7 +16,7 @@ CHECKSUM_SIZE = 16
 
 DISCONNECT_MESSAGE = '!DISCONNECT'
 
-BUFFER_SIZE = 1024
+BUFFER_SIZE = 4096
 
 def handle_exit_signal(signum, frame):
     send_message(client, DISCONNECT_MESSAGE)
@@ -31,7 +29,8 @@ client.connect(SERVER_ADDRESS)
 def send_message(connection, message):
     message = message.encode(ENCODE_FORMAT)
     header = f"{len(message):<{HEADER_SIZE}}".encode(ENCODE_FORMAT)
-    connection.send(header + message)
+    connection.sendall(header)
+    connection.sendall(message)
 
 def receive_message(connection):
     header = connection.recv(HEADER_SIZE).decode(ENCODE_FORMAT)
@@ -39,33 +38,6 @@ def receive_message(connection):
         return None
     message = connection.recv(int(header)).decode(ENCODE_FORMAT)
     return message
-
-def generate_checksum(data):
-    return hashlib.md5(data).hexdigest()[:16]
-
-def receive_chunk():
-    data = client.recv(BUFFER_SIZE)
-    header = data[:HEADER_SIZE]
-    chunk_data = data[HEADER_SIZE:]
-    seq, chunk_size, checksum = struct.unpack("!I I 16s", header[:24])
-    checksum = checksum.decode('utf-8').strip('\x00')
-    print(f"Received chunk {seq} with size {chunk_size} bytes and checksum {checksum}")
-    return seq, chunk_data
-
-def send_ack(seq):
-    ack_message = f"ACK {seq}"
-    send_message(client, ack_message)
-
-def download_chunk(file_name, seq, size):
-    send_message(client, f"GET {file_name} {seq} {size}")
-    seq, chunk_data = receive_chunk()
-    if chunk_data:
-        with open(file_name, 'r+b') as file:
-            file.seek(seq * size)
-            file.write(chunk_data)
-        print(f"Downloaded chunk {seq} of {file_name}")
-        send_ack(seq)
-    return chunk_data
 
 def convert_to_bytes(size_value, size_unit):
     size_value = float(size_value)
@@ -81,14 +53,15 @@ def convert_to_bytes(size_value, size_unit):
 def split_into_chunks(total_size, num_chunks=4):
     chunk_size = total_size // num_chunks
     chunks = []
+    
     for i in range(num_chunks):
         start = i * chunk_size
         end = (i + 1) * chunk_size if i < num_chunks - 1 else total_size
         chunks.append((start, end))
+
     return chunks
 
 def receive_downloaded_file_list():
-    send_message(client, "GET FILE LIST")
     file_list_str = receive_message(client)
     file_list = []
     if file_list_str:
@@ -142,41 +115,90 @@ def mark_file_as_done(file_name):
     except Exception as e:
         print(f"An error occurred while marking file {file_name} as done: {e}")
 
+def generate_checksum(data):
+    return hashlib.md5(data).hexdigest()[:16]
+
+def receive_chunk(connection, file_name, expected_seq, chunk_size):
+    print(f"CHUNK: FILE_NAME={file_name}, EXPECTED_SEQ={expected_seq}, CHUNK_SIZE={chunk_size}")
+    
+    header = connection.recv(HEADER_SIZE)
+    
+    if len(header) < 24:
+        print("Header size is smaller than expected.")
+        return None, None, None  # Handle the error properly
+
+    seq, size, checksum = struct.unpack("!I I 16s", header[0:24])  # Unpack header
+
+    print(f"Received chunk header: SEQ={seq}, SIZE={size}, CHECKSUM={checksum}")
+
+    if seq != expected_seq:
+        print(f"Expected chunk {expected_seq} but received chunk {seq}.")
+        return None, None, None
+
+    if size != chunk_size:
+        print(f"Expected chunk size {chunk_size} but received chunk size {size}.")
+        return None, None, None
+
+    chunk_data = b""
+    while len(chunk_data) < size:
+        data = connection.recv(min(BUFFER_SIZE, size - len(chunk_data)))
+        if not data:
+            print(f"Error: Connection closed unexpectedly while receiving chunk data for {file_name}")
+            return None, None, None
+        chunk_data += data
+    return seq, chunk_data, checksum
+
+def download_chunk(file_name, seq, size):
+    send_message(client, f"GET {file_name} {seq} {size}")
+    
+    seq, chunk_data, checksum = receive_chunk(client, file_name, seq, size)
+    
+    # TODO: The thread error because of this line, if many threads are running at the same time, the file will be corrupted
+    if chunk_data:
+        with open(file_name, 'r+b') as file:
+            print(f"Writing chunk {seq} to file {file_name}.")
+            file.seek(seq * size)
+            file.write(chunk_data)
+    
 def download_file(file_name, file_list):
     file_info = None
+
     for file in file_list:
         if file["file_name"] == file_name:
             file_info = file
             break
+
     if not file_info:
         print(f"File {file_name} is not in the list.")
         return
+    
     total_size = convert_to_bytes(file_info["size_value"], file_info["size_unit"])
+    
     print(f"Total size of {file_name}: {total_size} bytes")
+    
     chunks = split_into_chunks(total_size)
+    
     with open(file_name, 'wb') as file:
         file.truncate(total_size)
-    threads = []
+    
     for seq, (start, end) in enumerate(chunks):
         chunk_size = end - start
-        thread = threading.Thread(target=download_chunk, args=(file_name, seq, chunk_size))
-        threads.append(thread)
-        thread.start()
-    for thread in threads:
-        thread.join()
-    mark_file_as_done(file_name)
-    print(f"File {file_name} downloaded successfully.")
+        download_chunk(file_name, seq, chunk_size)
 
+    ## TODO: Uncomment
+    # mark_file_as_done(file_name) 
+    print(f"File {file_name} downloaded successfully.")
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, handle_exit_signal)
     file_list = receive_downloaded_file_list()
     display_file_list(file_list)
     try:
-        while True:
-            file_name = scan_input_txt()
-            if file_name:
-                download_file(file_name, file_list)
-            time.sleep(5)
+        download_file("1GB.zip", file_list)
+        # while True:
+        #     file_name = scan_input_txt()
+        #     if file_name:
+        #         download_file(file_name, file_list)
+        #     time.sleep(5)
     except Exception as e:
         print(f"Unexpected error: {e}")
