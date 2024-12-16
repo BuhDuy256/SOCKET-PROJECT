@@ -19,7 +19,7 @@ CHECKSUM_SIZE = 16
 DISCONNECT_MESSAGE = '!DISCONNECT'
 CONNECT_MESSAGE = '!CONNECT'
 
-BUFFER_SIZE = 50064
+BUFFER_SIZE = 4096
 
 server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 server.bind(SERVER_ADDRESS)
@@ -88,13 +88,13 @@ def send_chunk_file(client_address, file_name, seq, chunk_size):
             offset = 0
             while offset < len(chunk_data):
                 # Slice the data part of 4096 bytes
-                part_data = chunk_data[offset:offset + 4096]
+                part_data = chunk_data[offset:offset + BUFFER_SIZE]
 
                 # Send the data part without sending the header again
                 server.sendto(part_data, client_address)
 
                 # Update offset
-                offset += 4096
+                offset += BUFFER_SIZE
 
     except FileNotFoundError:
         print(f"File {file_name} not found.")
