@@ -81,7 +81,21 @@ def send_chunk_file(client_address, file_name, seq, chunk_size):
             header = struct.pack("!I I 16s", seq, len(chunk_data), checksum.encode(ENCODE_FORMAT))
             header = header.ljust(HEADER_SIZE, b'\x00')  
             print(f"Send chunk {seq} of {file_name} with size: {chunk_size}, chunksum: {checksum}")
-            server.sendto(header + chunk_data, client_address)
+            
+            server.sendto(header, client_address)  # Gửi header cho client
+
+            # Send data in parts (each part 4096 bytes)
+            offset = 0
+            while offset < len(chunk_data):
+                # Slice the data part of 4096 bytes
+                part_data = chunk_data[offset:offset + 4096]
+
+                # Send the data part without sending the header again
+                server.sendto(part_data, client_address)
+                print(f"Sent part {offset // 4096 + 1} of chunk {seq} to {client_address}")
+
+                # Update offset
+                offset += 4096
 
             ## TODO: Hanlde ACK
             ## ...
@@ -115,9 +129,7 @@ def handle_client(client_address, message):
             seq = int(match.group(2))
             size = int(match.group(3))
             
-            print(f"Received request to send chunk {seq} of {file_name} with size {size}")
-            
-            # Implement sending the chunk (e.g., send_chunk_file(client_address, file_name, seq, size))
+            send_chunk_file(client_address, file_name, seq, size)
         else:
             send_message_to_client("SERVER::Invalid GET request format", client_address)
             print(f"Invalid GET request format from {client_address}: {message}")

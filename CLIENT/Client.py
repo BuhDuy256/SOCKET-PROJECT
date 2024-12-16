@@ -147,13 +147,14 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
     """
     print(f"CHUNK: FILE_NAME={file_name}, EXPECTED_SEQ={expected_seq}, CHUNK_SIZE={chunk_size}")
 
-    data, _ = client_socket.recvfrom(HEADER_SIZE + chunk_size)
-
-    header = data[:HEADER_SIZE]
+    # Receive the header of the first chunk
+    data, _ = client_socket.recvfrom(HEADER_SIZE)
+    header = data[:(4 + 4 + CHECKSUM_SIZE)]
     seq, size, checksum = struct.unpack("!I I 16s", header)
 
     print(f"Received chunk header: SEQ={seq}, SIZE={size}, CHECKSUM={checksum.decode(ENCODE_FORMAT)}")
 
+    # Check if the sequence number of the chunk does not match
     if seq != expected_seq:
         print(f"Expected chunk {expected_seq} but received chunk {seq}.")
         return None, None, None
@@ -162,15 +163,21 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
         print(f"Expected chunk size {chunk_size} but received chunk size {size}.")
         return None, None, None
 
-    chunk_data = data[HEADER_SIZE:]
+    # Receive the data of the chunk (in parts of 4096 bytes)
+    received_data = b""
+    while len(received_data) < size:
+        part_data, _ = client_socket.recvfrom(4096)  # Receive small parts of data
+        received_data += part_data
+        print(f"Received part of chunk {seq}, size: {len(part_data)} bytes")
 
-    checksum_calculated = generate_checksum(chunk_data)
-
+    # Verify the checksum
+    checksum_calculated = generate_checksum(received_data)
     if checksum != checksum_calculated.encode(ENCODE_FORMAT):
         print(f"Checksum mismatch for chunk {seq} of file {file_name}.")
         return None, None, None
 
-    return seq, chunk_data, checksum
+    # Return valid chunk information
+    return seq, received_data, checksum
 
 
 def download_chunk(file_name, seq, size):
