@@ -80,7 +80,7 @@ def send_chunk_file(client_address, file_name, seq, chunk_size):
             checksum = generate_checksum(chunk_data)
             header = struct.pack("!I I 16s", seq, len(chunk_data), checksum.encode(ENCODE_FORMAT))
             header = header.ljust(HEADER_SIZE, b'\x00')  
-            print(f"Send chunk {seq} of {file_name} with size: {chunk_size}, chunksum: {checksum}")
+            # print(f"Send chunk {seq} of {file_name} with size: {chunk_size}, chunksum: {checksum}")
             
             server.sendto(header, client_address)  # Gửi header cho client
 
@@ -96,10 +96,6 @@ def send_chunk_file(client_address, file_name, seq, chunk_size):
                 # Update offset
                 offset += 4096
 
-            ## TODO: Hanlde ACK
-            ## ...
-
-
     except FileNotFoundError:
         print(f"File {file_name} not found.")
     except Exception as e:
@@ -108,16 +104,17 @@ def send_chunk_file(client_address, file_name, seq, chunk_size):
 #------------------------------------------------------------------------------------#
 def handle_client(client_address, message):
     """Handles a single client's request."""
-    print(f"Client address: {client_address}")
-    print(f"Received message: {message}")
+
+    # print(f"Client address: {client_address}")
+    # print(f"Received message: {message}")
 
     if message == CONNECT_MESSAGE:
-        print(f"Client {client_address} connected.")
+        # print(f"Client {client_address} connected.")
         send_downloaded_file_list(client_address)
 
     # Check for disconnection message
     elif message == DISCONNECT_MESSAGE:
-        print(f"Client {client_address} disconnected.")
+        # print(f"Client {client_address} disconnected.")
         return
 
     # Handle "GET" requests
@@ -130,13 +127,12 @@ def handle_client(client_address, message):
             
             send_chunk_file(client_address, file_name, seq, size)
         else:
-            send_message_to_client("SERVER::Invalid GET request format", client_address)
+            # send_message_to_client("SERVER::Invalid GET request format", client_address)
             print(f"Invalid GET request format from {client_address}: {message}")
 
     else:
+        # send_message_to_client("SERVER::Invalid Command", client_address)
         print(f"Invalid command from {client_address}: {message}")
-        # Optionally, send a response indicating an invalid command
-        send_message_to_client("SERVER::Invalid Command", client_address)
 #------------------------------------------------------------------------------------#
 
 def UDP_start():

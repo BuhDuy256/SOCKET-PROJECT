@@ -18,8 +18,9 @@ CHECKSUM_SIZE = 16
 DISCONNECT_MESSAGE = '!DISCONNECT'
 CONNECT_MESSAGE = '!CONNECT'
 
-BUFFER_SIZE = 50064
-MAX_THREADS = 5
+BUFFER_SIZE = 4096
+MAX_UDP_PAYLOAD_SIZE = 50064
+MAX_DOWLOADED_CHUNK_EACH_TIME = 5
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -64,12 +65,12 @@ def split_into_chunks(total_size):
         list: A list of tuples, where each tuple contains the start and end byte positions of a chunk.
     """
     chunks = []
-    buffer_size_without_header = BUFFER_SIZE - HEADER_SIZE
-    num_chunks = (total_size + buffer_size_without_header - 1) // buffer_size_without_header  # Calculate the number of chunks
+    max_payload_without_header = MAX_UDP_PAYLOAD_SIZE - HEADER_SIZE
+    num_chunks = (total_size + max_payload_without_header - 1) // max_payload_without_header  # Calculate the number of chunks
 
     for i in range(num_chunks):
-        start = i * buffer_size_without_header
-        end = min((i + 1) * buffer_size_without_header, total_size)  # Ensure the last chunk doesn't exceed the total size
+        start = i * max_payload_without_header
+        end = min((i + 1) * max_payload_without_header, total_size)  # Ensure the last chunk doesn't exceed the total size
         chunks.append((start, end))
 
     return chunks
@@ -145,16 +146,15 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
         client_socket (socket.socket): The socket used for communication.
 
     Returns:
-        tuple: (seq, chunk_data, checksum) if successful, or (None, None, None) if there is an error.
+        tuple: (seq, chunk_data) if successful, or (None, None) if there is an error.
     """
-    # print(f"CHUNK: FILE_NAME={file_name}, EXPECTED_SEQ={expected_seq}, CHUNK_SIZE={chunk_size}")
-
+    
     # Receive the header of the first chunk
     data, _ = client_socket.recvfrom(HEADER_SIZE)
     header = data[:(4 + 4 + CHECKSUM_SIZE)]
     seq, size, checksum = struct.unpack("!I I 16s", header)
 
-    print(f"Received chunk header: SEQ={seq}, SIZE={size}, CHECKSUM={checksum.decode(ENCODE_FORMAT)}")
+    # print (f"Received chunk {seq} of file {file_name} with size: {size} bytes, checksum: {checksum}")
 
     # Check if the sequence number of the chunk does not match
     if seq != expected_seq:
@@ -165,10 +165,10 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
         print(f"Expected chunk size {chunk_size} but received chunk size {size}.")
         return None, None
 
-    # Receive the data of the chunk (in parts of 4096 bytes)
+    # Receive the data of the chunk (in parts of BUFFER_SIZE bytes)
     received_data = b""
     while len(received_data) < size:
-        part_data, _ = client_socket.recvfrom(4096)  # Receive small parts of data
+        part_data, _ = client_socket.recvfrom(BUFFER_SIZE)  # Receive small parts of data
         received_data += part_data
 
     # Verify the checksum
@@ -180,16 +180,25 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
     # Return valid chunk information
     return seq, received_data
 
-
-def download_chunk(file_name, seq, size):
+def download_chunk(file_name, seq, size, max_retries=5):
     sub_client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    send_message_to_server(f"GET {file_name} {seq} {size}", sub_client)
-    seq, chunk_data = receive_chunk(file_name, seq, size, sub_client)
-    sub_client.close()
+    retries = 0
+    
+    try:
+        while retries < max_retries:
+            send_message_to_server(f"GET {file_name} {seq} {size}", sub_client)
+            seq_received, chunk_data = receive_chunk(file_name, seq, size, sub_client)
 
-    if seq is not None and chunk_data is not None:
-        return seq, chunk_data  # Return the sequence number and chunk data
-    return None, None
+            if seq_received is not None and chunk_data is not None:
+                return seq_received, chunk_data
+            else:
+                print(f"Retrying chunk {seq} of file {file_name}...")
+                retries += 1
+                time.sleep(5)  # Wait before retrying
+        
+        return None, None
+    finally:
+        sub_client.close()
     
 def download_file(file_name, file_list):
     file_info = None
@@ -210,8 +219,8 @@ def download_file(file_name, file_list):
     chunks = split_into_chunks(total_size)
     chunk_data_dict = {}  # Dictionary to store chunk data by sequence number
     
-    # Use ThreadPoolExecutor to download 5 chunks at a time
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+    # Use ThreadPoolExecutor to download MAX_THREADS chunks at a time
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DOWLOADED_CHUNK_EACH_TIME) as executor:
         futures = []
         
         # Download chunks in parallel
@@ -220,7 +229,7 @@ def download_file(file_name, file_list):
             futures.append(executor.submit(download_chunk, file_name, seq, chunk_size))
 
             # Wait for chunks to be downloaded in batches of 5
-            if len(futures) >= MAX_THREADS:
+            if len(futures) >= MAX_DOWLOADED_CHUNK_EACH_TIME:
                 concurrent.futures.wait(futures)
                 
                 for future in futures:
@@ -253,12 +262,15 @@ if __name__ == "__main__":
     file_list = receive_downloaded_file_list()
     display_file_list(file_list)
     try:
-        download_file("100MB.zip", file_list)
-        send_message_to_server(DISCONNECT_MESSAGE, client)
-        # while True:
-        #     file_name = scan_input_txt()
-        #     if file_name:
-        #         download_file(file_name, file_list)
-        #     time.sleep(5)
+        while True:
+            file_name = scan_input_txt()
+
+            if file_name:
+                download_file(file_name, file_list)
+                mark_file_as_done(file_name)
+            else:
+                print("No files to download.")
+                
+            time.sleep(5)
     except Exception as e:
         print(f"Unexpected error: {e}")
