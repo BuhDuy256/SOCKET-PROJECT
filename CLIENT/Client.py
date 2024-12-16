@@ -156,9 +156,15 @@ def receive_chunk(connection, file_name, expected_seq, chunk_size):
     return seq, chunk_data, checksum
 
 def download_chunk(file_name, seq, size):
-    send_message(client, f"GET {file_name} {seq} {size}")
+    while True:
+        send_message(client, f"GET {file_name} {seq} {size}")
+        seq, chunk_data, checksum = receive_chunk(client, file_name, seq, size)
+        
+        # Handle ACK
+        if (seq is not None) and (chunk_data is not None) and (checksum is not None):
+            send_message(client, f"ACK {seq}")
+            break
     
-    seq, chunk_data, checksum = receive_chunk(client, file_name, seq, size)
     
     # TODO: The thread error because of this line, if many threads are running at the same time, the file will be corrupted
     # if chunk_data:

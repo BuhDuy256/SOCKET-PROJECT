@@ -79,6 +79,15 @@ def send_chunk_file(connection, file_name, seq, chunk_size):
             connection.sendall(header)
             connection.sendall(chunk_data)
 
+            # Hanlde ACK
+            ack = receive_message(connection)
+            print(f"Received ACK for chunk {seq} of {file_name}: {ack}")        
+            if (ack == "ACK"):
+                print(f"Chunk {seq} of {file_name} sent successfully.")
+            else:
+                print(f"Chunk {seq} of {file_name} failed to send.")
+
+
     except FileNotFoundError:
         print(f"File {file_name} not found.")
     except Exception as e:
