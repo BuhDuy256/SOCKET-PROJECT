@@ -19,6 +19,7 @@ DISCONNECT_MESSAGE = '!DISCONNECT'
 CONNECT_MESSAGE = '!CONNECT'
 
 BUFFER_SIZE = 50064
+MAX_THREADS = 5
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -213,7 +214,7 @@ def download_file(file_name, file_list):
     chunk_data_dict = {}  # Dictionary to store chunk data by sequence number
     
     # Use ThreadPoolExecutor to download 5 chunks at a time
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
         futures = []
         
         # Download chunks in parallel
@@ -222,18 +223,23 @@ def download_file(file_name, file_list):
             futures.append(executor.submit(download_chunk, file_name, seq, chunk_size))
 
             # Wait for chunks to be downloaded in batches of 5
-            if len(futures) >= 5:
+            if len(futures) >= MAX_THREADS:
                 concurrent.futures.wait(futures)
+                
                 for future in futures:
                     seq, chunk_data = future.result()  # Get the result from the future
+                    
                     if seq is not None:
                         chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
+                        
                 futures = []  # Reset futures list
         
         # Wait for the remaining chunks to be downloaded
         concurrent.futures.wait(futures)
+        
         for future in futures:
             seq, chunk_data = future.result()  # Get the result from the future
+            
             if seq is not None:
                 chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
     
@@ -242,7 +248,6 @@ def download_file(file_name, file_list):
         for seq in range(len(chunks)):
             if seq in chunk_data_dict:
                 file.write(chunk_data_dict[seq])
-                print(f"Written chunk {seq} to file {file_name}.")
     
     print(f"File {file_name} downloaded and merged successfully.")
 
