@@ -188,6 +188,10 @@ def download_chunk(file_name, seq, size):
     
     ## TODO:Handle ACK
     ## ...
+
+    if seq is not None and chunk_data is not None:
+        return seq, chunk_data  # Return the sequence number and chunk data
+    return None, None
     
 def download_file(file_name, file_list):
     file_info = None
@@ -206,27 +210,41 @@ def download_file(file_name, file_list):
     print(f"Total size of {file_name}: {total_size} bytes")
     
     chunks = split_into_chunks(total_size)
+    chunk_data_dict = {}  # Dictionary to store chunk data by sequence number
     
     # Use ThreadPoolExecutor to download 5 chunks at a time
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = []
         
-        # Download 5 chunks at a time
+        # Download chunks in parallel
         for seq, (start, end) in enumerate(chunks):
             chunk_size = end - start
             futures.append(executor.submit(download_chunk, file_name, seq, chunk_size))
 
-            # When there are 5 chunks being downloaded, wait for these chunks to complete before downloading more
+            # Wait for chunks to be downloaded in batches of 5
             if len(futures) >= 5:
-                concurrent.futures.wait(futures)  # Wait for 5 chunks to complete
-                futures = []  # Reset futures to continue downloading 5 new chunks
+                concurrent.futures.wait(futures)
+                for future in futures:
+                    seq, chunk_data = future.result()  # Get the result from the future
+                    if seq is not None:
+                        chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
+                futures = []  # Reset futures list
         
-        # Wait for all remaining chunks to complete
+        # Wait for the remaining chunks to be downloaded
         concurrent.futures.wait(futures)
-
-    ## TODO: Uncomment
-    # mark_file_as_done(file_name) 
-    print(f"File {file_name} downloaded successfully.")
+        for future in futures:
+            seq, chunk_data = future.result()  # Get the result from the future
+            if seq is not None:
+                chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
+    
+    # Write the chunks to a file in the correct order
+    with open(file_name, 'wb') as file:
+        for seq in range(len(chunks)):
+            if seq in chunk_data_dict:
+                file.write(chunk_data_dict[seq])
+                print(f"Written chunk {seq} to file {file_name}.")
+    
+    print(f"File {file_name} downloaded and merged successfully.")
 
 if __name__ == "__main__":
     send_message_to_server(CONNECT_MESSAGE, client)
