@@ -147,7 +147,7 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
     Returns:
         tuple: (seq, chunk_data, checksum) if successful, or (None, None, None) if there is an error.
     """
-    print(f"CHUNK: FILE_NAME={file_name}, EXPECTED_SEQ={expected_seq}, CHUNK_SIZE={chunk_size}")
+    # print(f"CHUNK: FILE_NAME={file_name}, EXPECTED_SEQ={expected_seq}, CHUNK_SIZE={chunk_size}")
 
     # Receive the header of the first chunk
     data, _ = client_socket.recvfrom(HEADER_SIZE)
@@ -159,11 +159,11 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
     # Check if the sequence number of the chunk does not match
     if seq != expected_seq:
         print(f"Expected chunk {expected_seq} but received chunk {seq}.")
-        return None, None, None
+        return None, None
 
     if size != chunk_size:
         print(f"Expected chunk size {chunk_size} but received chunk size {size}.")
-        return None, None, None
+        return None, None
 
     # Receive the data of the chunk (in parts of 4096 bytes)
     received_data = b""
@@ -175,20 +175,17 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
     checksum_calculated = generate_checksum(received_data)
     if checksum != checksum_calculated.encode(ENCODE_FORMAT):
         print(f"Checksum mismatch for chunk {seq} of file {file_name}.")
-        return None, None, None
+        return None, None
 
     # Return valid chunk information
-    return seq, received_data, checksum
+    return seq, received_data
 
 
 def download_chunk(file_name, seq, size):
     sub_client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     send_message_to_server(f"GET {file_name} {seq} {size}", sub_client)
-    seq, chunk_data, checksum = receive_chunk(file_name, seq, size, sub_client)
+    seq, chunk_data = receive_chunk(file_name, seq, size, sub_client)
     sub_client.close()
-    
-    ## TODO:Handle ACK
-    ## ...
 
     if seq is not None and chunk_data is not None:
         return seq, chunk_data  # Return the sequence number and chunk data
