@@ -5,6 +5,7 @@ import struct
 import time
 import sys
 import signal
+import concurrent.futures
 
 SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 12345
@@ -168,7 +169,6 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
     while len(received_data) < size:
         part_data, _ = client_socket.recvfrom(4096)  # Receive small parts of data
         received_data += part_data
-        print(f"Received part of chunk {seq}, size: {len(part_data)} bytes")
 
     # Verify the checksum
     checksum_calculated = generate_checksum(received_data)
@@ -207,9 +207,22 @@ def download_file(file_name, file_list):
     
     chunks = split_into_chunks(total_size)
     
-    for seq, (start, end) in enumerate(chunks):
-        chunk_size = end - start
-        download_chunk(file_name, seq, chunk_size)
+    # Use ThreadPoolExecutor to download 5 chunks at a time
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = []
+        
+        # Download 5 chunks at a time
+        for seq, (start, end) in enumerate(chunks):
+            chunk_size = end - start
+            futures.append(executor.submit(download_chunk, file_name, seq, chunk_size))
+
+            # When there are 5 chunks being downloaded, wait for these chunks to complete before downloading more
+            if len(futures) >= 5:
+                concurrent.futures.wait(futures)  # Wait for 5 chunks to complete
+                futures = []  # Reset futures to continue downloading 5 new chunks
+        
+        # Wait for all remaining chunks to complete
+        concurrent.futures.wait(futures)
 
     ## TODO: Uncomment
     # mark_file_as_done(file_name) 
@@ -220,7 +233,7 @@ if __name__ == "__main__":
     file_list = receive_downloaded_file_list()
     display_file_list(file_list)
     try:
-        download_file("5MB.zip", file_list)
+        download_file("100MB.zip", file_list)
         send_message_to_server(DISCONNECT_MESSAGE, client)
         # while True:
         #     file_name = scan_input_txt()

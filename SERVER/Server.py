@@ -92,7 +92,6 @@ def send_chunk_file(client_address, file_name, seq, chunk_size):
 
                 # Send the data part without sending the header again
                 server.sendto(part_data, client_address)
-                print(f"Sent part {offset // 4096 + 1} of chunk {seq} to {client_address}")
 
                 # Update offset
                 offset += 4096
