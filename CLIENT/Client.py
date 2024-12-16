@@ -7,7 +7,7 @@ import sys
 import signal
 
 SERVER_IP = socket.gethostbyname(socket.gethostname())
-SERVER_PORT = 5050
+SERVER_PORT = 12345
 SERVER_ADDRESS = (SERVER_IP, SERVER_PORT)
 
 ENCODE_FORMAT = 'utf-8'
@@ -15,30 +15,13 @@ HEADER_SIZE = 64
 CHECKSUM_SIZE = 16
 
 DISCONNECT_MESSAGE = '!DISCONNECT'
+CONNECT_MESSAGE = '!CONNECT'
 
-BUFFER_SIZE = 4096
+BUFFER_SIZE = 50064
 
-def handle_exit_signal(signum, frame):
-    send_message(client, DISCONNECT_MESSAGE)
-    client.close()
-    sys.exit(0)
+client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-client.connect(SERVER_ADDRESS)
-
-def send_message(connection, message):
-    message = message.encode(ENCODE_FORMAT)
-    header = f"{len(message):<{HEADER_SIZE}}".encode(ENCODE_FORMAT)
-    connection.sendall(header)
-    connection.sendall(message)
-
-def receive_message(connection):
-    header = connection.recv(HEADER_SIZE).decode(ENCODE_FORMAT)
-    if not header:
-        return None
-    message = connection.recv(int(header)).decode(ENCODE_FORMAT)
-    return message
-
+#------------------------------------------------------------------------------------#
 def convert_to_bytes(size_value, size_unit):
     size_value = float(size_value)
     if size_unit == "KB":
@@ -50,19 +33,47 @@ def convert_to_bytes(size_value, size_unit):
     else:
         raise ValueError("Unknown size unit")
 
-def split_into_chunks(total_size, num_chunks=4):
-    chunk_size = total_size // num_chunks
+def send_message_to_server(message, client_socket):
+    """Sends a message to the SERVER"""
+    message = message.encode(ENCODE_FORMAT)
+    header = f"{len(message):<{HEADER_SIZE}}".encode(ENCODE_FORMAT)
+    client_socket.sendto(header + message, SERVER_ADDRESS)
+
+def receive_message_from_server(client_socket):
+    """Receives a message from SERVER"""
+    data, _ = client_socket.recvfrom(BUFFER_SIZE)
+    header = data[:HEADER_SIZE].decode(ENCODE_FORMAT).strip()
+
+    if not header:
+        return None
+
+    message = data[HEADER_SIZE:HEADER_SIZE + int(header)].decode(ENCODE_FORMAT)
+    return message
+
+def split_into_chunks(total_size):
+    """
+    Splits a file into chunks based on the buffer size.
+
+    Args:
+        total_size (int): The total size of the file in bytes.
+        buffer_size (int): The size of each chunk in bytes.
+
+    Returns:
+        list: A list of tuples, where each tuple contains the start and end byte positions of a chunk.
+    """
     chunks = []
-    
+    buffer_size_without_header = BUFFER_SIZE - HEADER_SIZE
+    num_chunks = (total_size + buffer_size_without_header - 1) // buffer_size_without_header  # Calculate the number of chunks
+
     for i in range(num_chunks):
-        start = i * chunk_size
-        end = (i + 1) * chunk_size if i < num_chunks - 1 else total_size
+        start = i * buffer_size_without_header
+        end = min((i + 1) * buffer_size_without_header, total_size)  # Ensure the last chunk doesn't exceed the total size
         chunks.append((start, end))
 
     return chunks
 
 def receive_downloaded_file_list():
-    file_list_str = receive_message(client)
+    file_list_str = receive_message_from_server(client)
     file_list = []
     if file_list_str:
         file_lines = file_list_str.strip().split("\n")
@@ -85,7 +96,9 @@ def display_file_list(file_list):
         return
     for file in file_list:
         print(f"{file['file_name']} {file['size_value']}{file['size_unit']}")
+#------------------------------------------------------------------------------------#
 
+#------------------------------------------------------------------------------------#
 def scan_input_txt():
     with open("input.txt", 'r') as file:
         lines = file.readlines()
@@ -114,22 +127,32 @@ def mark_file_as_done(file_name):
         print(f"File {file_name} has been marked as done.")
     except Exception as e:
         print(f"An error occurred while marking file {file_name} as done: {e}")
+#------------------------------------------------------------------------------------#
 
 def generate_checksum(data):
     return hashlib.md5(data).hexdigest()[:16]
 
-def receive_chunk(connection, file_name, expected_seq, chunk_size):
+def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
+    """
+    Receives a chunk of a file from the server and verifies its header and data.
+
+    Args:
+        file_name (str): The name of the file being received.
+        expected_seq (int): The expected sequence number of the chunk.
+        chunk_size (int): The size of each chunk.
+        client_socket (socket.socket): The socket used for communication.
+
+    Returns:
+        tuple: (seq, chunk_data, checksum) if successful, or (None, None, None) if there is an error.
+    """
     print(f"CHUNK: FILE_NAME={file_name}, EXPECTED_SEQ={expected_seq}, CHUNK_SIZE={chunk_size}")
-    
-    header = connection.recv(HEADER_SIZE)
-    
-    if len(header) < 24:
-        print("Header size is smaller than expected.")
-        return None, None, None  # Handle the error properly
 
-    seq, size, checksum = struct.unpack("!I I 16s", header[0:24])  # Unpack header
+    data, _ = client_socket.recvfrom(HEADER_SIZE + chunk_size)
 
-    print(f"Received chunk header: SEQ={seq}, SIZE={size}, CHECKSUM={checksum}")
+    header = data[:HEADER_SIZE]
+    seq, size, checksum = struct.unpack("!I I 16s", header)
+
+    print(f"Received chunk header: SEQ={seq}, SIZE={size}, CHECKSUM={checksum.decode(ENCODE_FORMAT)}")
 
     if seq != expected_seq:
         print(f"Expected chunk {expected_seq} but received chunk {seq}.")
@@ -139,13 +162,7 @@ def receive_chunk(connection, file_name, expected_seq, chunk_size):
         print(f"Expected chunk size {chunk_size} but received chunk size {size}.")
         return None, None, None
 
-    chunk_data = b""
-    while len(chunk_data) < size:
-        data = connection.recv(min(BUFFER_SIZE, size - len(chunk_data)))
-        if not data:
-            print(f"Error: Connection closed unexpectedly while receiving chunk data for {file_name}")
-            return None, None, None
-        chunk_data += data
+    chunk_data = data[HEADER_SIZE:]
 
     checksum_calculated = generate_checksum(chunk_data)
 
@@ -155,23 +172,15 @@ def receive_chunk(connection, file_name, expected_seq, chunk_size):
 
     return seq, chunk_data, checksum
 
+
 def download_chunk(file_name, seq, size):
-    while True:
-        send_message(client, f"GET {file_name} {seq} {size}")
-        seq, chunk_data, checksum = receive_chunk(client, file_name, seq, size)
-        
-        # Handle ACK
-        if (seq is not None) and (chunk_data is not None) and (checksum is not None):
-            send_message(client, f"ACK {seq}")
-            break
+    sub_client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    send_message_to_server(f"GET {file_name} {seq} {size}", sub_client)
+    seq, chunk_data, checksum = receive_chunk(file_name, seq, size, sub_client)
+    sub_client.close()
     
-    
-    # TODO: The thread error because of this line, if many threads are running at the same time, the file will be corrupted
-    # if chunk_data:
-    #     with open(file_name, 'r+b') as file:
-    #         print(f"Writing chunk {seq} to file {file_name}.")
-    #         file.seek(seq * size)
-    #         file.write(chunk_data)
+    ## TODO:Handle ACK
+    ## ...
     
 def download_file(file_name, file_list):
     file_info = None
@@ -190,10 +199,6 @@ def download_file(file_name, file_list):
     print(f"Total size of {file_name}: {total_size} bytes")
     
     chunks = split_into_chunks(total_size)
-
-    # TODO: Uncomment    
-    # with open(file_name, 'wb') as file:
-    #     file.truncate(total_size)
     
     for seq, (start, end) in enumerate(chunks):
         chunk_size = end - start
@@ -204,12 +209,12 @@ def download_file(file_name, file_list):
     print(f"File {file_name} downloaded successfully.")
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, handle_exit_signal)
+    send_message_to_server(CONNECT_MESSAGE, client)
     file_list = receive_downloaded_file_list()
     display_file_list(file_list)
     try:
         download_file("5MB.zip", file_list)
-        send_message(client, DISCONNECT_MESSAGE)
+        send_message_to_server(DISCONNECT_MESSAGE, client)
         # while True:
         #     file_name = scan_input_txt()
         #     if file_name:
