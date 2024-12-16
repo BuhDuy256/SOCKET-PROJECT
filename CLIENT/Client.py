@@ -146,6 +146,13 @@ def receive_chunk(connection, file_name, expected_seq, chunk_size):
             print(f"Error: Connection closed unexpectedly while receiving chunk data for {file_name}")
             return None, None, None
         chunk_data += data
+
+    checksum_calculated = generate_checksum(chunk_data)
+
+    if checksum != checksum_calculated.encode(ENCODE_FORMAT):
+        print(f"Checksum mismatch for chunk {seq} of file {file_name}.")
+        return None, None, None
+
     return seq, chunk_data, checksum
 
 def download_chunk(file_name, seq, size):
@@ -154,11 +161,11 @@ def download_chunk(file_name, seq, size):
     seq, chunk_data, checksum = receive_chunk(client, file_name, seq, size)
     
     # TODO: The thread error because of this line, if many threads are running at the same time, the file will be corrupted
-    if chunk_data:
-        with open(file_name, 'r+b') as file:
-            print(f"Writing chunk {seq} to file {file_name}.")
-            file.seek(seq * size)
-            file.write(chunk_data)
+    # if chunk_data:
+    #     with open(file_name, 'r+b') as file:
+    #         print(f"Writing chunk {seq} to file {file_name}.")
+    #         file.seek(seq * size)
+    #         file.write(chunk_data)
     
 def download_file(file_name, file_list):
     file_info = None
@@ -177,9 +184,10 @@ def download_file(file_name, file_list):
     print(f"Total size of {file_name}: {total_size} bytes")
     
     chunks = split_into_chunks(total_size)
-    
-    with open(file_name, 'wb') as file:
-        file.truncate(total_size)
+
+    # TODO: Uncomment    
+    # with open(file_name, 'wb') as file:
+    #     file.truncate(total_size)
     
     for seq, (start, end) in enumerate(chunks):
         chunk_size = end - start
@@ -194,7 +202,8 @@ if __name__ == "__main__":
     file_list = receive_downloaded_file_list()
     display_file_list(file_list)
     try:
-        download_file("1GB.zip", file_list)
+        download_file("5MB.zip", file_list)
+        send_message(client, DISCONNECT_MESSAGE)
         # while True:
         #     file_name = scan_input_txt()
         #     if file_name:

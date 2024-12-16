@@ -68,15 +68,14 @@ def generate_checksum(data):
     return hashlib.md5(data).hexdigest()[:16]
 
 def send_chunk_file(connection, file_name, seq, chunk_size):
-    print(f"Send chunk {seq} of {file_name} with size {chunk_size}")
     try:
         with open(file_name, "rb") as file:
             file.seek(seq * chunk_size)
             chunk_data = file.read(chunk_size)
-            print(len(chunk_data))
             checksum = generate_checksum(chunk_data)
             header = struct.pack("!I I 16s", seq, len(chunk_data), checksum.encode(ENCODE_FORMAT))
             header = header.ljust(HEADER_SIZE, b'\x00')  
+            print(f"Send chunk {seq} of {file_name} with size: {chunk_size}, chunksum: {checksum}")
             connection.sendall(header)
             connection.sendall(chunk_data)
 
