@@ -28,7 +28,9 @@ client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 #------------------------------------------------------------------------------------#
 def convert_to_bytes(size_value, size_unit):
     size_value = float(size_value)
-    if size_unit == "KB":
+    if (size_unit == "B"):
+        return int(size_value)
+    elif size_unit == "KB":
         return int(size_value * 1024)
     elif size_unit == "MB":
         return int(size_value * 1024 * 1024)
@@ -300,10 +302,7 @@ def scan_and_add_to_queue(file_queue):
         files_to_download = scan_input_txt()
         if files_to_download:
             for file_name in files_to_download:
-                print(f"Adding {file_name} to the download queue.")
                 file_queue.put(file_name)
-        else:
-            print("No files to download. Waiting for 5 seconds...")
 
         time.sleep(5)
 
