@@ -282,14 +282,19 @@ def download_file(file_name, file_list):
                 if seq is not None:
                     chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
                     download_bar.update(1)  # Update progress bar
-    
+
+    # Create the file with fixed size before writing
+    with open(file_name, 'wb') as f:
+        f.truncate(total_size)  # Create the file with the fixed size
+
     # Progress bar for merging chunks
     with tqdm(total=len(chunks), desc=f"Merging {new_file_name}", unit="chunk") as merge_bar:
-        # Write the chunks to a file in the correct order
-        with open(new_file_name, 'wb') as file:
+        # Open the file to write chunks in the correct order
+        with open(new_file_name, 'r+b') as file:  # Open in 'r+b' mode to read and write binary
             for seq in sorted(chunk_data_dict.keys()):
-                    file.write(chunk_data_dict[seq])
-                    merge_bar.update(1)  # Update progress bar
+                file.seek(seq * MAX_UDP_PAYLOAD_SIZE)  # Move to the correct position based on the chunk sequence
+                file.write(chunk_data_dict[seq])  # Write the chunk data to the correct position
+                merge_bar.update(1)  # Update progress bar
     
     print(f"File {file_name} downloaded and merged as {new_file_name} successfully.")
 
