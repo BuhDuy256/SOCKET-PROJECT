@@ -19,8 +19,8 @@ CHECKSUM_SIZE = 16
 DISCONNECT_MESSAGE = '!DISCONNECT'
 CONNECT_MESSAGE = '!CONNECT'
 
-BUFFER_SIZE = 4096
-MAX_UDP_PAYLOAD_SIZE = 50064
+BUFFER_SIZE = 1024
+MAX_UDP_PAYLOAD_SIZE = BUFFER_SIZE * 10
 MAX_DOWLOADED_CHUNKS_EACH_TIME = 5
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -68,12 +68,11 @@ def split_into_chunks(total_size):
         list: A list of tuples, where each tuple contains the start and end byte positions of a chunk.
     """
     chunks = []
-    max_payload_without_header = MAX_UDP_PAYLOAD_SIZE - HEADER_SIZE
-    num_chunks = (total_size + max_payload_without_header - 1) // max_payload_without_header  # Calculate the number of chunks
+    num_chunks = (total_size + MAX_UDP_PAYLOAD_SIZE - 1) // MAX_UDP_PAYLOAD_SIZE  # Calculate the number of chunks
 
     for i in range(num_chunks):
-        start = i * max_payload_without_header
-        end = min((i + 1) * max_payload_without_header, total_size)  # Ensure the last chunk doesn't exceed the total size
+        start = i * MAX_UDP_PAYLOAD_SIZE
+        end = min((i + 1) * MAX_UDP_PAYLOAD_SIZE, total_size)  # Ensure the last chunk doesn't exceed the total size
         chunks.append((start, end))
 
     return chunks
@@ -288,8 +287,7 @@ def download_file(file_name, file_list):
     with tqdm(total=len(chunks), desc=f"Merging {new_file_name}", unit="chunk") as merge_bar:
         # Write the chunks to a file in the correct order
         with open(new_file_name, 'wb') as file:
-            for seq in range(len(chunks)):
-                if seq in chunk_data_dict:
+            for seq in sorted(chunk_data_dict.keys()):
                     file.write(chunk_data_dict[seq])
                     merge_bar.update(1)  # Update progress bar
     
