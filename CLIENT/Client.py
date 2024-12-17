@@ -6,6 +6,7 @@ import time
 import sys
 import signal
 import concurrent.futures
+from tqdm import tqdm
 
 SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 12345
@@ -20,7 +21,7 @@ CONNECT_MESSAGE = '!CONNECT'
 
 BUFFER_SIZE = 4096
 MAX_UDP_PAYLOAD_SIZE = 50064
-MAX_DOWLOADED_CHUNK_EACH_TIME = 5
+MAX_DOWLOADED_CHUNKS_EACH_TIME = 5
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -200,6 +201,21 @@ def download_chunk(file_name, seq, size, max_retries=5):
     finally:
         sub_client.close()
     
+import os
+
+def get_unique_filename(file_name):
+    """Checks if a file already exists on the local system and adds a number to the name if it does."""
+    base_name, extension = os.path.splitext(file_name)
+    counter = 1
+    new_file_name = file_name
+    
+    # Check if the file exists, and if so, increment the counter in the filename
+    while os.path.exists(new_file_name):
+        new_file_name = f"{base_name}({counter}){extension}"
+        counter += 1
+    
+    return new_file_name
+
 def download_file(file_name, file_list):
     file_info = None
 
@@ -213,49 +229,59 @@ def download_file(file_name, file_list):
         return
     
     total_size = convert_to_bytes(file_info["size_value"], file_info["size_unit"])
-    
     print(f"Total size of {file_name}: {total_size} bytes")
+    
+    # Get a unique file name if the file already exists on the local machine
+    new_file_name = get_unique_filename(file_name)
+    print(f"Saving file as: {new_file_name}")
     
     chunks = split_into_chunks(total_size)
     chunk_data_dict = {}  # Dictionary to store chunk data by sequence number
     
-    # Use ThreadPoolExecutor to download MAX_THREADS chunks at a time
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DOWLOADED_CHUNK_EACH_TIME) as executor:
-        futures = []
-        
-        # Download chunks in parallel
-        for seq, (start, end) in enumerate(chunks):
-            chunk_size = end - start
-            futures.append(executor.submit(download_chunk, file_name, seq, chunk_size))
-
-            # Wait for chunks to be downloaded in batches of 5
-            if len(futures) >= MAX_DOWLOADED_CHUNK_EACH_TIME:
-                concurrent.futures.wait(futures)
-                
-                for future in futures:
-                    seq, chunk_data = future.result()  # Get the result from the future
-                    
-                    if seq is not None:
-                        chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
-                        
-                futures = []  # Reset futures list
-        
-        # Wait for the remaining chunks to be downloaded
-        concurrent.futures.wait(futures)
-        
-        for future in futures:
-            seq, chunk_data = future.result()  # Get the result from the future
+    # Progress bar for downloading chunks
+    with tqdm(total=len(chunks), desc=f"Downloading {file_name}", unit="chunk") as download_bar:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DOWLOADED_CHUNKS_EACH_TIME) as executor:
+            futures = []
             
-            if seq is not None:
-                chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
+            # Download chunks in parallel
+            for seq, (start, end) in enumerate(chunks):
+                chunk_size = end - start
+                futures.append(executor.submit(download_chunk, file_name, seq, chunk_size))
+
+                # Wait for chunks to be downloaded in batches of 5
+                if len(futures) >= MAX_DOWLOADED_CHUNKS_EACH_TIME:
+                    concurrent.futures.wait(futures)
+                    
+                    for future in futures:
+                        seq, chunk_data = future.result()  # Get the result from the future
+                        
+                        if seq is not None:
+                            chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
+                            download_bar.update(1)  # Update progress bar
+                        
+                    futures = []  # Reset futures list
+            
+            # Wait for the remaining chunks to be downloaded
+            concurrent.futures.wait(futures)
+            
+            for future in futures:
+                seq, chunk_data = future.result()  # Get the result from the future
+                
+                if seq is not None:
+                    chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
+                    download_bar.update(1)  # Update progress bar
     
-    # Write the chunks to a file in the correct order
-    with open(file_name, 'wb') as file:
-        for seq in range(len(chunks)):
-            if seq in chunk_data_dict:
-                file.write(chunk_data_dict[seq])
+    # Progress bar for merging chunks
+    with tqdm(total=len(chunks), desc=f"Merging {file_name}", unit="chunk") as merge_bar:
+        # Write the chunks to a file in the correct order
+        with open(new_file_name, 'wb') as file:
+            for seq in range(len(chunks)):
+                if seq in chunk_data_dict:
+                    file.write(chunk_data_dict[seq])
+                    merge_bar.update(1)  # Update progress bar
     
-    print(f"File {file_name} downloaded and merged successfully.")
+    print(f"File {file_name} downloaded and merged as {new_file_name} successfully.")
+
 
 if __name__ == "__main__":
     send_message_to_server(CONNECT_MESSAGE, client)
