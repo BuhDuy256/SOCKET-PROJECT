@@ -19,9 +19,9 @@ CHECKSUM_SIZE = 16
 DISCONNECT_MESSAGE = '!DISCONNECT'
 CONNECT_MESSAGE = '!CONNECT'
 
-BUFFER_SIZE = 1024
-MAX_UDP_PAYLOAD_SIZE = BUFFER_SIZE * 5
-MAX_DOWLOADED_CHUNKS_EACH_TIME = 1
+BUFFER_SIZE = 4096
+MAX_UDP_PAYLOAD_SIZE = 4096 * 10
+MAX_DOWLOADED_CHUNKS_EACH_TIME = 5
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -218,6 +218,8 @@ def get_unique_filename(file_name):
     
     return new_file_name
 
+lock = threading.Lock()
+
 def download_file(file_name, file_list):
     file_info = None
 
@@ -258,7 +260,8 @@ def download_file(file_name, file_list):
                         seq, chunk_data = future.result()  # Get the result from the future
 
                         if seq is not None:
-                            chunk_data_dict[seq] = chunk_data  # Save chunk data by sequence number
+                            with lock:
+                                chunk_data_dict[seq] = chunk_data  # Save chunk data by sequence number
                             download_bar.update(1)  # Update progress bar
 
                     futures = []  # Reset futures list for the next batch
