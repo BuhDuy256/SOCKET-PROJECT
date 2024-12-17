@@ -239,7 +239,7 @@ def download_file(file_name, file_list):
     chunk_data_dict = {}  # Dictionary to store chunk data by sequence number
     
     # Progress bar for downloading chunks
-    with tqdm(total=len(chunks), desc=f"Downloading {file_name}", unit="chunk") as download_bar:
+    with tqdm(total=len(chunks), desc=f"Downloading {new_file_name}", unit="chunk") as download_bar:
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DOWLOADED_CHUNKS_EACH_TIME) as executor:
             futures = []
             
@@ -272,7 +272,7 @@ def download_file(file_name, file_list):
                     download_bar.update(1)  # Update progress bar
     
     # Progress bar for merging chunks
-    with tqdm(total=len(chunks), desc=f"Merging {file_name}", unit="chunk") as merge_bar:
+    with tqdm(total=len(chunks), desc=f"Merging {new_file_name}", unit="chunk") as merge_bar:
         # Write the chunks to a file in the correct order
         with open(new_file_name, 'wb') as file:
             for seq in range(len(chunks)):
