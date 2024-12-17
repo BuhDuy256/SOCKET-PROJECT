@@ -7,6 +7,7 @@ import concurrent.futures
 from tqdm import tqdm
 import queue
 import threading
+import sys
 
 SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 12345
@@ -21,7 +22,7 @@ CONNECT_MESSAGE = '!CONNECT'
 
 BUFFER_SIZE = 4096
 MAX_UDP_PAYLOAD_SIZE = 4096 * 10
-MAX_DOWLOADED_CHUNKS_EACH_TIME = 10
+MAX_DOWLOADED_CHUNKS_EACH_TIME = 1
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -170,15 +171,17 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
         print(f"Expected chunk size {chunk_size} but received chunk size {size}.")
         return None, None
 
-    # Receive the data of the chunk (in parts of BUFFER_SIZE bytes)
-    received_data = b""
-    while len(received_data) < size:
-        part_data, _ = client_socket.recvfrom(BUFFER_SIZE)  # Receive small parts of data
-        received_data += part_data
+    # # Receive the data of the chunk (in parts of BUFFER_SIZE bytes)
+    # received_data = b""
+    # while len(received_data) < size:
+    #     part_data, _ = client_socket.recvfrom(BUFFER_SIZE)  # Receive small parts of data
+    #     received_data += part_data
+
+    received_data, _ = client_socket.recvfrom(size)
 
     # Verify the checksum
     checksum_calculated = generate_checksum(received_data)
-    if checksum != checksum_calculated.encode(ENCODE_FORMAT):
+    if checksum.decode(ENCODE_FORMAT) != checksum_calculated:
         print(f"Checksum mismatch for chunk {seq} of file {file_name}.")
         return None, None
 
@@ -260,7 +263,7 @@ def download_file(file_name, file_list):
                         seq, chunk_data = future.result()  # Get the result from the future
 
                         # if seq is not None:
-                        if seq is not None:
+                        if seq is not None and chunk_data is not None:
                             with lock:
                                 chunk_data_dict[seq] = chunk_data  # Save chunk data by sequence number
                             download_bar.update(1)  # Update progress bar
@@ -313,19 +316,21 @@ if __name__ == "__main__":
     send_message_to_server(CONNECT_MESSAGE, client)
     file_list = receive_downloaded_file_list()
     display_file_list(file_list)
-    try:
-        file_queue = queue.Queue()
+    download_file("3.pdf", file_list)
+    send_message_to_server(DISCONNECT_MESSAGE, client)
+    # try:
+    #     file_queue = queue.Queue()
 
-        scan_thread = threading.Thread(target=scan_and_add_to_queue, args=(file_queue,))
-        scan_thread.daemon = True
-        scan_thread.start()
+    #     scan_thread = threading.Thread(target=scan_and_add_to_queue, args=(file_queue,))
+    #     scan_thread.daemon = True
+    #     scan_thread.start()
 
-        download_thread = threading.Thread(target=download_from_queue, args=(file_queue, file_list))
-        download_thread.daemon = True
-        download_thread.start()
+    #     download_thread = threading.Thread(target=download_from_queue, args=(file_queue, file_list))
+    #     download_thread.daemon = True
+    #     download_thread.start()
 
-        scan_thread.join()
-        download_thread.join()
+    #     scan_thread.join()
+    #     download_thread.join()
 
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+    # except Exception as e:
+    #     print(f"Unexpected error: {e}")
