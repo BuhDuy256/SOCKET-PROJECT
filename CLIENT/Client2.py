@@ -57,7 +57,7 @@ def merge_files(file_name, num_parts):
 
 def main():
     # Cấu hình
-    server_ip = "192.168.100.8"       
+    server_ip = socket.gethostbyname(socket.gethostname())       
     server_port = 5000           
     file_name = "100MB.zip" 
     num_threads = 4              
