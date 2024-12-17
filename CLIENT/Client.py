@@ -21,7 +21,7 @@ CONNECT_MESSAGE = '!CONNECT'
 
 BUFFER_SIZE = 4096
 MAX_UDP_PAYLOAD_SIZE = 4096 * 10
-MAX_DOWLOADED_CHUNKS_EACH_TIME = 5
+MAX_DOWLOADED_CHUNKS_EACH_TIME = 10
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -247,18 +247,19 @@ def download_file(file_name, file_list):
             futures = []
             
             # Download chunks in parallel
-            for seq, (start, end) in enumerate(chunks):
+            for expected_seq, (start, end) in enumerate(chunks):
                 chunk_size = end - start
-                futures.append(executor.submit(download_chunk, file_name, seq, chunk_size))
+                futures.append(executor.submit(download_chunk, file_name, expected_seq, chunk_size))
 
                 # Check if there are enough chunks to create corresponding processes
-                if len(futures) == MAX_DOWLOADED_CHUNKS_EACH_TIME or seq == len(chunks) - 1:
+                if len(futures) == MAX_DOWLOADED_CHUNKS_EACH_TIME or expected_seq == len(chunks) - 1:
                     concurrent.futures.wait(futures)  # Wait for the processes to complete
 
                     # Process the results of the processes
                     for future in futures:
                         seq, chunk_data = future.result()  # Get the result from the future
 
+                        # if seq is not None:
                         if seq is not None:
                             with lock:
                                 chunk_data_dict[seq] = chunk_data  # Save chunk data by sequence number
