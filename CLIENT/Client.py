@@ -3,10 +3,10 @@ import socket
 import hashlib
 import struct
 import time
-import sys
-import signal
 import concurrent.futures
 from tqdm import tqdm
+import queue
+import threading
 
 SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 12345
@@ -106,17 +106,30 @@ def display_file_list(file_list):
 def scan_input_txt():
     with open("input.txt", 'r') as file:
         lines = file.readlines()
-    for line in lines:
-        if 'in progress' in line:
-            return None
+
+    files_to_download = []
+    
+    # Filter files that are not marked 'done' or 'in progress'
     for i, line in enumerate(lines):
-        if 'done' not in line:
-            file_name = line.split()[0]
-            lines[i] = f"{file_name} in progress\n"
-            with open("input.txt", 'w') as file:
-                file.writelines(lines)
-            return file_name
-    return None
+        file_name = line.strip()  # Remove whitespace and newline
+        if 'done' not in file_name and 'in progress' not in file_name:
+            files_to_download.append((file_name, i))
+
+    # If there are no files to download, return None
+    if not files_to_download:
+        return None
+    
+    # Mark these files as 'in progress'
+    for _, idx in files_to_download:
+        lines[idx] = f"{lines[idx].strip()} in progress\n"
+    
+    # Save the changes back to input.txt
+    with open("input.txt", 'w') as file:
+        file.writelines(lines)
+
+    # Return the list of files to download
+    return [file_name for file_name, _ in files_to_download]
+
 
 def mark_file_as_done(file_name):
     try:
@@ -282,21 +295,42 @@ def download_file(file_name, file_list):
     
     print(f"File {file_name} downloaded and merged as {new_file_name} successfully.")
 
+def scan_and_add_to_queue(file_queue):
+    while True:
+        files_to_download = scan_input_txt()
+        if files_to_download:
+            for file_name in files_to_download:
+                print(f"Adding {file_name} to the download queue.")
+                file_queue.put(file_name)
+        else:
+            print("No files to download. Waiting for 5 seconds...")
+
+        time.sleep(5)
+
+def download_from_queue(file_queue, file_list):
+    while True:
+        if not file_queue.empty():
+            file_name = file_queue.get()
+            download_file(file_name, file_list)
+            mark_file_as_done(file_name)
 
 if __name__ == "__main__":
     send_message_to_server(CONNECT_MESSAGE, client)
     file_list = receive_downloaded_file_list()
     display_file_list(file_list)
     try:
-        while True:
-            file_name = scan_input_txt()
+        file_queue = queue.Queue()
 
-            if file_name:
-                download_file(file_name, file_list)
-                mark_file_as_done(file_name)
-            else:
-                print("No files to download.")
-                
-            time.sleep(5)
+        scan_thread = threading.Thread(target=scan_and_add_to_queue, args=(file_queue,))
+        scan_thread.daemon = True
+        scan_thread.start()
+
+        download_thread = threading.Thread(target=download_from_queue, args=(file_queue, file_list))
+        download_thread.daemon = True
+        download_thread.start()
+
+        scan_thread.join()
+        download_thread.join()
+
     except Exception as e:
         print(f"Unexpected error: {e}")
