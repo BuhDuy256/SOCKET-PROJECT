@@ -21,7 +21,7 @@ CONNECT_MESSAGE = '!CONNECT'
 
 BUFFER_SIZE = 1024
 MAX_UDP_PAYLOAD_SIZE = BUFFER_SIZE * 10
-MAX_DOWLOADED_CHUNKS_EACH_TIME = 5
+MAX_DOWLOADED_CHUNKS_EACH_TIME = 1
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -260,31 +260,33 @@ def download_file(file_name, file_list):
                 chunk_size = end - start
                 futures.append(executor.submit(download_chunk, file_name, seq, chunk_size))
 
-                # Wait for chunks to be downloaded in batches of 5
-                if len(futures) >= MAX_DOWLOADED_CHUNKS_EACH_TIME:
-                    concurrent.futures.wait(futures)
-                    
+                # Check if there are enough chunks to create corresponding processes
+                if len(futures) == MAX_DOWLOADED_CHUNKS_EACH_TIME or seq == len(chunks) - 1:
+                    concurrent.futures.wait(futures)  # Wait for the processes to complete
+
+                    # Process the results of the processes
                     for future in futures:
                         seq, chunk_data = future.result()  # Get the result from the future
-                        
+
                         if seq is not None:
-                            chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
+                            chunk_data_dict[seq] = chunk_data  # Save chunk data by sequence number
                             download_bar.update(1)  # Update progress bar
-                        
-                    futures = []  # Reset futures list
-            
-            # Wait for the remaining chunks to be downloaded
-            concurrent.futures.wait(futures)
-            
-            for future in futures:
-                seq, chunk_data = future.result()  # Get the result from the future
-                
-                if seq is not None:
-                    chunk_data_dict[seq] = chunk_data  # Store the chunk data by seq
-                    download_bar.update(1)  # Update progress bar
+
+                    futures = []  # Reset futures list for the next batch
+
+            # After the main loop, process any remaining chunks (if any)
+            if futures:
+                concurrent.futures.wait(futures)
+
+                for future in futures:
+                    seq, chunk_data = future.result()  # Get the result from the future
+
+                    if seq is not None:
+                        chunk_data_dict[seq] = chunk_data  # Save chunk data by sequence number
+                        download_bar.update(1)  # Update progress bar
 
     # Create the file with fixed size before writing
-    with open(file_name, 'wb') as f:
+    with open(new_file_name, 'wb') as f:
         f.truncate(total_size)  # Create the file with the fixed size
 
     # Progress bar for merging chunks
