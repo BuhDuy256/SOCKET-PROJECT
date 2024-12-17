@@ -26,18 +26,6 @@ MAX_DOWLOADED_CHUNKS_EACH_TIME = 1
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 #------------------------------------------------------------------------------------#
-def convert_to_bytes(size_value, size_unit):
-    size_value = float(size_value)
-    if (size_unit == "B"):
-        return int(size_value)
-    elif size_unit == "KB":
-        return int(size_value * 1024)
-    elif size_unit == "MB":
-        return int(size_value * 1024 * 1024)
-    elif size_unit == "GB":
-        return int(size_value * 1024 * 1024 * 1024)
-    else:
-        raise ValueError("Unknown size unit")
 
 def send_message_to_server(message, client_socket):
     """Sends a message to the SERVER"""
@@ -84,14 +72,16 @@ def receive_downloaded_file_list():
         file_lines = file_list_str.strip().split("\n")
         for file_line in file_lines:
             file_info = file_line.split()
-            if len(file_info) >= 2:
+            if len(file_info) == 4:
                 file_name = file_info[0]
-                file_size = " ".join(file_info[1:])
-                size_value, size_unit = file_size.split()
+                file_size_str = file_info[1]
+                unit = file_info[2]
+                actual_byte = int(file_info[3])
                 file_list.append({
                     "file_name": file_name,
-                    "size_value": size_value,
-                    "size_unit": size_unit
+                    "size_str": file_size_str,
+                    "unit": unit,
+                    "actual_byte": actual_byte
                 })
     return file_list
 
@@ -100,7 +90,7 @@ def display_file_list(file_list):
         print("No files available to download.")
         return
     for file in file_list:
-        print(f"{file['file_name']} {file['size_value']}{file['size_unit']}")
+        print(f"{file['file_name']} {file['size_str']}{file['unit']} {file['actual_byte']} bytes")
 #------------------------------------------------------------------------------------#
 
 #------------------------------------------------------------------------------------#
@@ -239,10 +229,9 @@ def download_file(file_name, file_list):
     if not file_info:
         print(f"File {file_name} is not in the list.")
         return
-    
-    total_size = convert_to_bytes(file_info["size_value"], file_info["size_unit"])
-    print(f"Total size of {file_name}: {total_size} bytes")
-    
+
+    total_size = file_info["actual_byte"]
+
     # Get a unique file name if the file already exists on the local machine
     new_file_name = get_unique_filename(file_name)
     print(f"Saving file as: {new_file_name}")

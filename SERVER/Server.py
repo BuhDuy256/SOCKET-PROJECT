@@ -34,7 +34,7 @@ def convert_size(size_in_bytes):
     while size_in_bytes >= 1024 and i < len(units) - 1:
         size_in_bytes /= 1024.0
         i += 1
-    return f"{size_in_bytes:.2f} {units[i]}"
+    return f"{size_in_bytes} {units[i]}"
 
 def send_downloaded_file_list(client_address):
     """Sends a list of downloadable files to the client."""
@@ -46,8 +46,9 @@ def send_downloaded_file_list(client_address):
     file_list_str = []
     for file in files:
         file_size = os.path.getsize(os.path.join(server_dir, file))
+        print(  f"File: {file}, Size: {file_size}")
         file_size_str = convert_size(file_size)
-        file_list_str.append(f"{file} {file_size_str}")
+        file_list_str.append(f"{file} {file_size_str} {file_size}")
 
     message = "\n".join(file_list_str)
     send_message_to_client(message, client_address)
@@ -88,7 +89,7 @@ def send_chunk_file(client_address, file_name, seq, chunk_size):
             offset = 0
             while offset < len(chunk_data):
                 # Slice the data part of 4096 bytes
-                part_data = chunk_data[offset:offset + BUFFER_SIZE]
+                part_data = chunk_data[offset:offset + min(BUFFER_SIZE, len(chunk_data) - offset)]
 
                 # Send the data part without sending the header again
                 server.sendto(part_data, client_address)
