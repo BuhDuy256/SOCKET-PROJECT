@@ -215,8 +215,6 @@ def download_chunk(file_name, seq, size, max_retries=5):
         return None, None
     finally:
         sub_client.close()
-    
-import os
 
 def get_unique_filename(file_name):
     """Checks if a file already exists on the local system and adds a number to the name if it does."""
