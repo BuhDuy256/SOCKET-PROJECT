@@ -344,7 +344,7 @@ def download_from_queue_multiprocess(file_queue, file_list):
         while True:
             if not file_queue.empty():
                 file_name = file_queue.get()
-                download_file("file_name", file_list)
+                download_file(file_name, file_list)
     except KeyboardInterrupt:
         # print("Download process interrupted.")
         return
