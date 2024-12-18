@@ -1,12 +1,9 @@
 import os
-import socket
-import threading
-import hashlib
-import struct
-import time
-import sys
-import signal
 import re
+import socket
+import struct
+import hashlib
+import threading
 
 SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 12345

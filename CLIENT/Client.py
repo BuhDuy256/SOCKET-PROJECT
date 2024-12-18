@@ -1,13 +1,14 @@
 import os
+import sys
+import time
+import queue
+import signal
+import struct
 import socket
 import hashlib
-import struct
-import time
+import threading
 import concurrent.futures
 from tqdm import tqdm
-import queue
-import threading
-import sys
 
 SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 12345
@@ -24,6 +25,7 @@ BUFFER_SIZE = 4096
 MAX_CHUNK_SIZE = BUFFER_SIZE * 10
 MAX_DOWLOADED_CHUNKS_EACH_TIME = 10
 MAX_UDP_PAYLOAD_SIZE = 65507
+MAX_DOWNLOAD_FILE_RETRIES = 1
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -57,13 +59,13 @@ def get_unique_filename(file_name):
     
     return new_file_name
 
-def split_into_chunks(total_size):
+def split_into_chunks(total_size, max_chunk_size=MAX_CHUNK_SIZE):
     chunks = []
-    num_chunks = (total_size + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
+    num_chunks = (total_size + max_chunk_size - 1) // max_chunk_size
 
     for i in range(num_chunks):
-        start = i * MAX_CHUNK_SIZE
-        end = min((i + 1) * MAX_CHUNK_SIZE, total_size)
+        start = i * max_chunk_size
+        end = min((i + 1) * max_chunk_size, total_size)
         chunks.append((start, end))
 
     return chunks
@@ -116,7 +118,7 @@ def scan_input_txt():
     
     for i, line in enumerate(lines):
         file_name = line.strip()
-        if 'done' not in file_name and 'in progress' not in file_name:
+        if 'done' not in file_name and 'in progress' not in file_name and 'failed' not in file_name:
             files_to_download.append((file_name, i))
 
     if not files_to_download:
@@ -130,17 +132,21 @@ def scan_input_txt():
 
     return [file_name for file_name, _ in files_to_download]
 
-def mark_file_as_done(file_name):
+def mark_file_as(file_name, status):
     try:
         with open("input.txt", 'r') as file:
             lines = file.readlines()
         for i, line in enumerate(lines):
             if line.startswith(file_name) and 'in progress' in line:
-                lines[i] = f"{file_name} done\n"
+                if status == "done":
+                    lines[i] = f"{file_name} done\n"
+                    print(f"Marked file {file_name} as done.")
+                elif status == "failed":
+                    lines[i] = f"{file_name} failed\n"
+                    print(f"Marked file {file_name} as failed.")
                 break
         with open("input.txt", 'w') as file:
             file.writelines(lines)
-        print(f"File {file_name} has been marked as done.")
     except Exception as e:
         print(f"An error occurred while marking file {file_name} as done: {e}")
 
@@ -176,7 +182,7 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
 
     received_data = b""
     while len(received_data) < size:
-        part_data, _ = client_socket.recvfrom(BUFFER_SIZE + 1)
+        part_data, _ = client_socket.recvfrom(BUFFER_SIZE)
         received_data += part_data
 
     checksum_calculated = generate_checksum(received_data)
@@ -224,69 +230,65 @@ def download_file(file_name, file_list):
         return
 
     total_size = file_info["actual_byte"]
-
     print("Total size of the file:", total_size)
 
     new_file_name = get_unique_filename(file_name)
     print(f"Saving file as: {new_file_name}")
-    
+
     chunks = split_into_chunks(total_size)
-    chunk_data_dict = {}
-    
-    with tqdm(total=len(chunks), desc=f"Downloading {new_file_name}", unit="chunk") as download_bar:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DOWLOADED_CHUNKS_EACH_TIME) as executor:
-            futures = []
-            
-            for expected_seq, (start, end) in enumerate(chunks):
-                chunk_size = end - start
-                futures.append(executor.submit(download_chunk, file_name, expected_seq, chunk_size))
 
-                if len(futures) == MAX_DOWLOADED_CHUNKS_EACH_TIME or expected_seq == len(chunks) - 1:
-                    concurrent.futures.wait(futures)
+    retries = 0
+    while retries < MAX_DOWNLOAD_FILE_RETRIES:
+        chunk_data_dict = {}
 
-                    for future in futures:
-                        seq, chunk_data = future.result()
-                        
-                        if seq is not None and chunk_data is not None:
-                            with lock:
-                                chunk_data_dict[seq] = chunk_data
-                            download_bar.update(1)
-
+        try:
+            with tqdm(total=len(chunks), desc=f"Downloading {new_file_name}", unit="chunk") as download_bar:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DOWLOADED_CHUNKS_EACH_TIME) as executor:
                     futures = []
 
-            if futures:
-                concurrent.futures.wait(futures)
+                    for expected_seq, (start, end) in enumerate(chunks):
+                        chunk_size = end - start
+                        futures.append(executor.submit(download_chunk, file_name, expected_seq, chunk_size))
 
-                for future in futures:
-                    seq, chunk_data = future.result()
+                        if len(futures) == MAX_DOWLOADED_CHUNKS_EACH_TIME or expected_seq == len(chunks) - 1:
+                            concurrent.futures.wait(futures)
 
-                    if seq is not None:
-                        chunk_data_dict[seq] = chunk_data
-                        download_bar.update(1)
-            if futures:
-                concurrent.futures.wait(futures)
+                            for future in futures:
+                                seq, chunk_data = future.result()
+                                if seq is not None and chunk_data is not None:
+                                    with lock:
+                                        chunk_data_dict[seq] = chunk_data
+                                    download_bar.update(1)
 
-                for future in futures:
-                    seq, chunk_data = future.result()
+                            futures = []
 
-                    if seq is not None:
-                        chunk_data_dict[seq] = chunk_data
-                        download_bar.update(1)
+            with tqdm(total=len(chunks), desc=f"Merging {new_file_name}", unit="chunk") as merge_bar:
+                with open(new_file_name, "wb") as file:
+                    for seq in sorted(chunk_data_dict.keys()):
+                        file.write(chunk_data_dict[seq])
+                        merge_bar.update(1)
 
-    with tqdm(total=len(chunks), desc=f"Merging {new_file_name}", unit="chunk") as merge_bar:
-        with open(new_file_name, "wb") as file:
-            for seq in sorted(chunk_data_dict.keys()):
-                file.write(chunk_data_dict[seq])
-                merge_bar.update(1)
+            server_file_checksum = file_info["checksum"]
+            new_file_checksum = generate_file_checksum(new_file_name)
 
-    server_file_checksum = file_info["checksum"]
-    new_file_checksum = generate_file_checksum(new_file_name)
-    
-    if (new_file_checksum == server_file_checksum):
-        print(f"File {file_name} downloaded and merged as {new_file_name} successfully.")
-    else:
-        print(f"Checksum mismatch for file {file_name}.")
-        os.remove(new_file_name)
+            if new_file_checksum == server_file_checksum:
+                print(f"File {file_name} downloaded and merged as {new_file_name} successfully.")
+                mark_file_as(file_name, "done")
+                break
+            else:
+                print(f"Checksum mismatch for file {file_name}.")
+                os.remove(new_file_name)
+                retries += 1
+                time.sleep(5)
+
+        except Exception as e:
+            print(f"Error downloading file {file_name}, attempt {retries + 1}/{MAX_DOWNLOAD_FILE_RETRIES}: {e}")
+            retries += 1
+            time.sleep(5)
+
+    if retries == MAX_DOWNLOAD_FILE_RETRIES:
+        print(f"Failed to download file {file_name} after {MAX_DOWNLOAD_FILE_RETRIES} attempts.")
+        mark_file_as(file_name, "failed")
 
 def scan_and_add_to_queue(file_queue):
     while True:
@@ -302,27 +304,30 @@ def download_from_queue(file_queue, file_list):
         if not file_queue.empty():
             file_name = file_queue.get()
             download_file(file_name, file_list)
-            mark_file_as_done(file_name)
+
+def signal_handler(sig, frame):
+    print("Ctrl+C pressed! Exiting...")
+    sys.exit(0)
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, signal_handler)
+
     send_message_to_server(CONNECT_MESSAGE, client)
     file_list = receive_downloaded_file_list()
     display_file_list(file_list)
-    download_file("100MB.zip", file_list)
-    send_message_to_server(DISCONNECT_MESSAGE, client)
-    # try:
-    #     file_queue = queue.Queue()
+    try:
+        file_queue = queue.Queue()
 
-    #     scan_thread = threading.Thread(target=scan_and_add_to_queue, args=(file_queue,))
-    #     scan_thread.daemon = True
-    #     scan_thread.start()
+        scan_thread = threading.Thread(target=scan_and_add_to_queue, args=(file_queue,))
+        scan_thread.daemon = True
+        scan_thread.start()
 
-    #     download_thread = threading.Thread(target=download_from_queue, args=(file_queue, file_list))
-    #     download_thread.daemon = True
-    #     download_thread.start()
+        download_thread = threading.Thread(target=download_from_queue, args=(file_queue, file_list))
+        download_thread.daemon = True
+        download_thread.start()
 
-    #     scan_thread.join()
-    #     download_thread.join()
+        scan_thread.join()
+        download_thread.join()
 
-    # except Exception as e:
-    #     print(f"Unexpected error: {e}")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
