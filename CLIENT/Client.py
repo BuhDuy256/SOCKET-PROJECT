@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-import queue
 import signal
 import struct
 import socket
@@ -9,6 +8,7 @@ import hashlib
 import threading
 import concurrent.futures
 from tqdm import tqdm
+from multiprocessing import Process, Queue
 
 SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 12345
@@ -28,6 +28,7 @@ MAX_UDP_PAYLOAD_SIZE = 65507
 MAX_DOWNLOAD_FILE_RETRIES = 1
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+exit_event = threading.Event()
 
 #------------------------------------------------------------------------------------#
 
@@ -181,8 +182,8 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
         print(f"Expected chunk size {chunk_size} but received chunk size {size}.")
         return None, None
 
-    received_data = b""
-    while len(received_data) < size:
+    received_data = b""  
+    while len(received_data) < size and not exit_event.is_set():
         part_data, _ = client_socket.recvfrom(min(BUFFER_SIZE, size - len(received_data)))
         received_data += part_data
 
@@ -199,7 +200,7 @@ def download_chunk(file_name, seq, size, max_retries=5):
     retries = 0
     
     try:
-        while retries < max_retries:
+        while retries < max_retries and not exit_event.is_set():
             send_message_to_server(f"GET {file_name} {seq} {size}", sub_client)
             seq_received, chunk_data = receive_chunk(file_name, seq, size, sub_client)
 
@@ -239,7 +240,7 @@ def download_file(file_name, file_list):
     chunks = split_into_chunks(total_size)
 
     retries = 0
-    while retries < MAX_DOWNLOAD_FILE_RETRIES:
+    while retries < MAX_DOWNLOAD_FILE_RETRIES and not exit_event.is_set():
         chunk_data_dict = {}
 
         try:
@@ -291,46 +292,75 @@ def download_file(file_name, file_list):
         print(f"Failed to download file {file_name} after {MAX_DOWNLOAD_FILE_RETRIES} attempts.")
         mark_file_as(file_name, "failed")
 
-def scan_and_add_to_queue(file_queue):
-    while True:
-        files_to_download = scan_input_txt()
-        if files_to_download:
-            for file_name in files_to_download:
-                file_queue.put(file_name)
-        else:
-            print("No files to download from input.txt")
-
-        time.sleep(5)
-
-def download_from_queue(file_queue, file_list):
-    while True:
-        if not file_queue.empty():
-            file_name = file_queue.get()
-            download_file(file_name, file_list)
-
 def signal_handler(sig, frame):
     print("Ctrl+C pressed! Exiting...")
-    sys.exit(0)
+    exit_event.set()
+
+def scan_and_add_to_queue_multiprocess(file_queue):
+    try:
+        while True:
+            files_to_download = scan_input_txt()
+            if files_to_download:
+                for file_name in files_to_download:
+                    file_queue.put(file_name)
+            else:
+                print("No files to download from input.txt")
+            time.sleep(5)
+    except Exception as e:
+        print(f"Error in scan process: {e}")
+        raise
+    except KeyboardInterrupt:
+        # print("Scan process interrupted.")
+        return
+
+def download_from_queue_multiprocess(file_queue, file_list):
+    try:
+        while True:
+            if not file_queue.empty():
+                file_name = file_queue.get()
+                download_file(file_name, file_list)
+    except KeyboardInterrupt:
+        # print("Download process interrupted.")
+        return
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, signal_handler)
-
-    send_message_to_server(CONNECT_MESSAGE, client)
-    file_list = receive_downloaded_file_list()
-    display_file_list(file_list)
     try:
-        file_queue = queue.Queue()
+        signal.signal(signal.SIGINT, signal_handler)
 
-        scan_thread = threading.Thread(target=scan_and_add_to_queue, args=(file_queue,))
-        scan_thread.daemon = True
-        scan_thread.start()
+        send_message_to_server(CONNECT_MESSAGE, client)
+        file_list = receive_downloaded_file_list()
+        display_file_list(file_list)
 
-        download_thread = threading.Thread(target=download_from_queue, args=(file_queue, file_list))
-        download_thread.daemon = True
-        download_thread.start()
+        file_queue = Queue()
+        scan_process = Process(target=scan_and_add_to_queue_multiprocess, args=(file_queue,), daemon=True)
+        download_process = Process(target=download_from_queue_multiprocess, args=(file_queue, file_list), daemon=True)
 
-        scan_thread.join()
-        download_thread.join()
+        scan_process.start()
+        download_process.start()
 
+        while scan_process.is_alive() and download_process.is_alive():
+            time.sleep(0.1)
+
+    except KeyboardInterrupt:
+        print("\nCtrl+C pressed! Terminating processes...")
     except Exception as e:
         print(f"Unexpected error: {e}")
+    finally:
+        if scan_process.is_alive():
+            scan_process.terminate()
+        if download_process.is_alive():
+            download_process.terminate()
+
+        # print(f"Scan process exited with code: {scan_process.exitcode}")
+        # print(f"Download process exited with code: {download_process.exitcode}")
+
+        try:
+            client.close()
+        except Exception as close_error:
+            print(f"Error while closing socket: {close_error}")
+
+        if scan_process.exitcode not in (0, None) or download_process.exitcode not in (0, None):
+            sys.exit(1)
+
+        print("Exiting program.")
+        sys.exit(0)
