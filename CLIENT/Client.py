@@ -21,8 +21,9 @@ DISCONNECT_MESSAGE = '!DISCONNECT'
 CONNECT_MESSAGE = '!CONNECT'
 
 BUFFER_SIZE = 4096
-MAX_UDP_PAYLOAD_SIZE = 4096 * 10
-MAX_DOWLOADED_CHUNKS_EACH_TIME = 1
+MAX_CHUNK_SIZE = BUFFER_SIZE * 10
+MAX_DOWLOADED_CHUNKS_EACH_TIME = 10
+MAX_UDP_PAYLOAD_SIZE = 65507
 
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -45,83 +46,90 @@ def receive_message_from_server(client_socket):
     message = data[HEADER_SIZE:HEADER_SIZE + int(header)].decode(ENCODE_FORMAT)
     return message
 
+def get_unique_filename(file_name):
+    base_name, extension = os.path.splitext(file_name)
+    counter = 1
+    new_file_name = file_name
+
+    while os.path.exists(new_file_name):
+        new_file_name = f"{base_name}({counter}){extension}"
+        counter += 1
+    
+    return new_file_name
+
 def split_into_chunks(total_size):
-    """
-    Splits a file into chunks based on the buffer size.
-
-    Args:
-        total_size (int): The total size of the file in bytes.
-        buffer_size (int): The size of each chunk in bytes.
-
-    Returns:
-        list: A list of tuples, where each tuple contains the start and end byte positions of a chunk.
-    """
     chunks = []
-    num_chunks = (total_size + MAX_UDP_PAYLOAD_SIZE - 1) // MAX_UDP_PAYLOAD_SIZE  # Calculate the number of chunks
+    num_chunks = (total_size + MAX_CHUNK_SIZE - 1) // MAX_CHUNK_SIZE
 
     for i in range(num_chunks):
-        start = i * MAX_UDP_PAYLOAD_SIZE
-        end = min((i + 1) * MAX_UDP_PAYLOAD_SIZE, total_size)  # Ensure the last chunk doesn't exceed the total size
+        start = i * MAX_CHUNK_SIZE
+        end = min((i + 1) * MAX_CHUNK_SIZE, total_size)
         chunks.append((start, end))
 
     return chunks
 
 def receive_downloaded_file_list():
-    file_list_str = receive_message_from_server(client)
-    file_list = []
-    if file_list_str:
-        file_lines = file_list_str.strip().split("\n")
-        for file_line in file_lines:
-            file_info = file_line.split()
-            if len(file_info) == 4:
-                file_name = file_info[0]
-                file_size_str = file_info[1]
-                unit = file_info[2]
-                actual_byte = int(file_info[3])
-                file_list.append({
-                    "file_name": file_name,
-                    "size_str": file_size_str,
-                    "unit": unit,
-                    "actual_byte": actual_byte
-                })
-    return file_list
+    try:
+        data, server_address = client.recvfrom(MAX_UDP_PAYLOAD_SIZE)
+        file_list_str = data.decode('utf-8')
+        file_list = []
+
+        if file_list_str:
+            file_lines = file_list_str.strip().split("\n")
+            for file_line in file_lines:
+                file_info = file_line.split()
+                
+                if len(file_info) >= 5:
+                    file_name = " ".join(file_info[:-4])
+                    file_size_str = file_info[-4]
+                    unit = file_info[-3]
+                    actual_byte = int(file_info[-2])
+                    file_checksum = file_info[-1]
+
+                    file_list.append({
+                        "file_name": file_name,
+                        "size_str": file_size_str,
+                        "unit": unit,
+                        "actual_byte": actual_byte,
+                        "checksum": file_checksum
+                    })
+
+        return file_list
+
+    except Exception as e:
+        print(f"Error receiving file list: {e}")
+        return []
 
 def display_file_list(file_list):
     if not file_list:
         print("No files available to download.")
         return
     for file in file_list:
-        print(f"{file['file_name']} {file['size_str']}{file['unit']} {file['actual_byte']} bytes")
-#------------------------------------------------------------------------------------#
+        print(f"{file['file_name']} {file['size_str']}{file['unit']} {file['actual_byte']} bytes {file['checksum']}")
 
 #------------------------------------------------------------------------------------#
+
 def scan_input_txt():
     with open("input.txt", 'r') as file:
         lines = file.readlines()
 
     files_to_download = []
     
-    # Filter files that are not marked 'done' or 'in progress'
     for i, line in enumerate(lines):
-        file_name = line.strip()  # Remove whitespace and newline
+        file_name = line.strip()
         if 'done' not in file_name and 'in progress' not in file_name:
             files_to_download.append((file_name, i))
 
-    # If there are no files to download, return None
     if not files_to_download:
         return None
-    
-    # Mark these files as 'in progress'
+
     for _, idx in files_to_download:
         lines[idx] = f"{lines[idx].strip()} in progress\n"
-    
-    # Save the changes back to input.txt
+
     with open("input.txt", 'w') as file:
         file.writelines(lines)
 
-    # Return the list of files to download
     return [file_name for file_name, _ in files_to_download]
-
 
 def mark_file_as_done(file_name):
     try:
@@ -136,33 +144,17 @@ def mark_file_as_done(file_name):
         print(f"File {file_name} has been marked as done.")
     except Exception as e:
         print(f"An error occurred while marking file {file_name} as done: {e}")
+
 #------------------------------------------------------------------------------------#
 
 def generate_checksum(data):
-    return hashlib.md5(data).hexdigest()[:16]
+    return hashlib.md5(data).hexdigest()[:CHECKSUM_SIZE]
 
 def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
-    """
-    Receives a chunk of a file from the server and verifies its header and data.
-
-    Args:
-        file_name (str): The name of the file being received.
-        expected_seq (int): The expected sequence number of the chunk.
-        chunk_size (int): The size of each chunk.
-        client_socket (socket.socket): The socket used for communication.
-
-    Returns:
-        tuple: (seq, chunk_data) if successful, or (None, None) if there is an error.
-    """
-    
-    # Receive the header of the first chunk
     data, _ = client_socket.recvfrom(HEADER_SIZE)
     header = data[:(4 + 4 + CHECKSUM_SIZE)]
     seq, size, checksum = struct.unpack("!I I 16s", header)
 
-    # print (f"Received chunk {seq} of file {file_name} with size: {size} bytes, checksum: {checksum}")
-
-    # Check if the sequence number of the chunk does not match
     if seq != expected_seq:
         print(f"Expected chunk {expected_seq} but received chunk {seq}.")
         return None, None
@@ -171,21 +163,17 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
         print(f"Expected chunk size {chunk_size} but received chunk size {size}.")
         return None, None
 
-    # # Receive the data of the chunk (in parts of BUFFER_SIZE bytes)
-    # received_data = b""
-    # while len(received_data) < size:
-    #     part_data, _ = client_socket.recvfrom(BUFFER_SIZE)  # Receive small parts of data
-    #     received_data += part_data
+    received_data = b""
+    while len(received_data) < size:
+        part_data, _ = client_socket.recvfrom(BUFFER_SIZE + 1)
+        received_data += part_data
 
-    received_data, _ = client_socket.recvfrom(size)
-
-    # Verify the checksum
     checksum_calculated = generate_checksum(received_data)
     if checksum.decode(ENCODE_FORMAT) != checksum_calculated:
         print(f"Checksum mismatch for chunk {seq} of file {file_name}.")
+        time.sleep(5)
         return None, None
 
-    # Return valid chunk information
     return seq, received_data
 
 def download_chunk(file_name, seq, size, max_retries=5):
@@ -202,24 +190,13 @@ def download_chunk(file_name, seq, size, max_retries=5):
             else:
                 print(f"Retrying chunk {seq} of file {file_name}...")
                 retries += 1
-                time.sleep(5)  # Wait before retrying
+                time.sleep(5)
         
         return None, None
     finally:
         sub_client.close()
 
-def get_unique_filename(file_name):
-    """Checks if a file already exists on the local system and adds a number to the name if it does."""
-    base_name, extension = os.path.splitext(file_name)
-    counter = 1
-    new_file_name = file_name
-    
-    # Check if the file exists, and if so, increment the counter in the filename
-    while os.path.exists(new_file_name):
-        new_file_name = f"{base_name}({counter}){extension}"
-        counter += 1
-    
-    return new_file_name
+#------------------------------------------------------------------------------------#
 
 lock = threading.Lock()
 
@@ -237,62 +214,59 @@ def download_file(file_name, file_list):
 
     total_size = file_info["actual_byte"]
 
-    # Get a unique file name if the file already exists on the local machine
+    print("Total size of the file:", total_size)
+
     new_file_name = get_unique_filename(file_name)
     print(f"Saving file as: {new_file_name}")
     
     chunks = split_into_chunks(total_size)
-    chunk_data_dict = {}  # Dictionary to store chunk data by sequence number
+    chunk_data_dict = {}
     
-    # Progress bar for downloading chunks
     with tqdm(total=len(chunks), desc=f"Downloading {new_file_name}", unit="chunk") as download_bar:
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DOWLOADED_CHUNKS_EACH_TIME) as executor:
             futures = []
             
-            # Download chunks in parallel
             for expected_seq, (start, end) in enumerate(chunks):
                 chunk_size = end - start
                 futures.append(executor.submit(download_chunk, file_name, expected_seq, chunk_size))
 
-                # Check if there are enough chunks to create corresponding processes
                 if len(futures) == MAX_DOWLOADED_CHUNKS_EACH_TIME or expected_seq == len(chunks) - 1:
-                    concurrent.futures.wait(futures)  # Wait for the processes to complete
+                    concurrent.futures.wait(futures)
 
-                    # Process the results of the processes
                     for future in futures:
-                        seq, chunk_data = future.result()  # Get the result from the future
-
-                        # if seq is not None:
+                        seq, chunk_data = future.result()
+                        
                         if seq is not None and chunk_data is not None:
                             with lock:
-                                chunk_data_dict[seq] = chunk_data  # Save chunk data by sequence number
-                            download_bar.update(1)  # Update progress bar
+                                chunk_data_dict[seq] = chunk_data
+                            download_bar.update(1)
 
-                    futures = []  # Reset futures list for the next batch
+                    futures = []
 
-            # After the main loop, process any remaining chunks (if any)
             if futures:
                 concurrent.futures.wait(futures)
 
                 for future in futures:
-                    seq, chunk_data = future.result()  # Get the result from the future
+                    seq, chunk_data = future.result()
 
                     if seq is not None:
-                        chunk_data_dict[seq] = chunk_data  # Save chunk data by sequence number
-                        download_bar.update(1)  # Update progress bar
+                        chunk_data_dict[seq] = chunk_data
+                        download_bar.update(1)
+            if futures:
+                concurrent.futures.wait(futures)
 
-    # Create the file with fixed size before writing
-    with open(new_file_name, 'wb') as f:
-        f.truncate(total_size)  # Create the file with the fixed size
+                for future in futures:
+                    seq, chunk_data = future.result()
 
-    # Progress bar for merging chunks
+                    if seq is not None:
+                        chunk_data_dict[seq] = chunk_data
+                        download_bar.update(1)
+
     with tqdm(total=len(chunks), desc=f"Merging {new_file_name}", unit="chunk") as merge_bar:
-        # Open the file to write chunks in the correct order
-        with open(new_file_name, 'r+b') as file:  # Open in 'r+b' mode to read and write binary
+        with open(new_file_name, "wb") as file:
             for seq in sorted(chunk_data_dict.keys()):
-                file.seek(seq * MAX_UDP_PAYLOAD_SIZE)  # Move to the correct position based on the chunk sequence
-                file.write(chunk_data_dict[seq])  # Write the chunk data to the correct position
-                merge_bar.update(1)  # Update progress bar
+                file.write(chunk_data_dict[seq])
+                merge_bar.update(1)
     
     print(f"File {file_name} downloaded and merged as {new_file_name} successfully.")
 
@@ -316,7 +290,7 @@ if __name__ == "__main__":
     send_message_to_server(CONNECT_MESSAGE, client)
     file_list = receive_downloaded_file_list()
     display_file_list(file_list)
-    download_file("3.pdf", file_list)
+    download_file("overworld.mp3", file_list)
     send_message_to_server(DISCONNECT_MESSAGE, client)
     # try:
     #     file_queue = queue.Queue()

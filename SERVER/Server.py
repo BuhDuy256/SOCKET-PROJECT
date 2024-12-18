@@ -19,12 +19,14 @@ CHECKSUM_SIZE = 16
 DISCONNECT_MESSAGE = '!DISCONNECT'
 CONNECT_MESSAGE = '!CONNECT'
 
-BUFFER_SIZE = 1024
+BUFFER_SIZE = 4096
+MAX_UDP_PAYLOAD_SIZE = 65507
 
 server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 server.bind(SERVER_ADDRESS)
 
 #------------------------------------------------------------------------------------#
+
 def convert_size(size_in_bytes):
     """Converts a file size in bytes to a human-readable format."""
     if size_in_bytes <= 0:
@@ -34,7 +36,22 @@ def convert_size(size_in_bytes):
     while size_in_bytes >= 1024 and i < len(units) - 1:
         size_in_bytes /= 1024.0
         i += 1
-    return f"{size_in_bytes} {units[i]}"
+    return f"{size_in_bytes}.1f {units[i]}"
+
+def generate_checksum(data):
+    return hashlib.md5(data).hexdigest()[:CHECKSUM_SIZE]
+
+def generate_file_checksum(file_name):
+    md5_hash = hashlib.md5()
+    try:
+        with open(file_name, "rb") as f:
+            for chunk in iter(lambda: f.read(BUFFER_SIZE), b""):
+                md5_hash.update(chunk)
+        return md5_hash.hexdigest()
+    except FileNotFoundError:
+        return f"Error: File '{file_name}' not found."
+    except Exception as e:
+        return f"Error: {e}"
 
 def send_downloaded_file_list(client_address):
     """Sends a list of downloadable files to the client."""
@@ -46,11 +63,16 @@ def send_downloaded_file_list(client_address):
     file_list_str = []
     for file in files:
         file_size = os.path.getsize(os.path.join(server_dir, file))
-        print(  f"File: {file}, Size: {file_size}")
-        file_size_str = convert_size(file_size)
-        file_list_str.append(f"{file} {file_size_str} {file_size}")
+        size_str = convert_size(file_size)
+        file_checksum = generate_file_checksum(file)
+        file_list_str.append(f"{file} {size_str} {file_size} {file_checksum}")
 
     message = "\n".join(file_list_str)
+    encoded_message = message.encode('utf-8')
+
+    if len(encoded_message) > MAX_UDP_PAYLOAD_SIZE:
+        raise ValueError("Message too large to send via a single UDP packet.")
+
     send_message_to_client(message, client_address)
 
 def send_message_to_client(message, client_address):
@@ -68,10 +90,8 @@ def receive_message_from_client():
 
     message = data[HEADER_SIZE:HEADER_SIZE + int(header)].decode(ENCODE_FORMAT)
     return message, client_address
-#------------------------------------------------------------------------------------#
 
-def generate_checksum(data):
-    return hashlib.md5(data).hexdigest()[:16]
+#------------------------------------------------------------------------------------#
 
 def send_chunk_file(client_address, file_name, seq, chunk_size):
     try:
@@ -80,21 +100,14 @@ def send_chunk_file(client_address, file_name, seq, chunk_size):
             chunk_data = file.read(chunk_size)
             checksum = generate_checksum(chunk_data)
             header = struct.pack("!I I 16s", seq, len(chunk_data), checksum.encode(ENCODE_FORMAT))
-            header = header.ljust(HEADER_SIZE, b'\x00')  
-            # print(f"Send chunk {seq} of {file_name} with size: {chunk_size}, chunksum: {checksum}")
+            header = header.ljust(HEADER_SIZE, b'\x00')
             
-            server.sendto(header, client_address)  # Gửi header cho client
+            server.sendto(header, client_address)
 
-            # Send data in parts (each part 4096 bytes)
             offset = 0
             while offset < len(chunk_data):
-                # Slice the data part of 4096 bytes
                 part_data = chunk_data[offset:offset + min(BUFFER_SIZE, len(chunk_data) - offset)]
-
-                # Send the data part without sending the header again
                 server.sendto(part_data, client_address)
-
-                # Update offset
                 offset += BUFFER_SIZE
 
     except FileNotFoundError:
@@ -103,22 +116,15 @@ def send_chunk_file(client_address, file_name, seq, chunk_size):
         print(f"[ERROR] Error sending chunk: {e}")
 
 #------------------------------------------------------------------------------------#
+
 def handle_client(client_address, message):
-    """Handles a single client's request."""
-
-    # print(f"Client address: {client_address}")
-    # print(f"Received message: {message}")
-
     if message == CONNECT_MESSAGE:
-        # print(f"Client {client_address} connected.")
         send_downloaded_file_list(client_address)
 
-    # Check for disconnection message
     elif message == DISCONNECT_MESSAGE:
-        # print(f"Client {client_address} disconnected.")
+        print(f"Client {client_address} disconnected.")
         return
 
-    # Handle "GET" requests
     elif message.startswith("GET"):
         match = re.match(r"^GET (\S+) (\d+) (\d+)$", message)
         if match:
@@ -128,24 +134,18 @@ def handle_client(client_address, message):
             
             send_chunk_file(client_address, file_name, seq, size)
         else:
-            # send_message_to_client("SERVER::Invalid GET request format", client_address)
             print(f"Invalid GET request format from {client_address}: {message}")
 
     else:
-        # send_message_to_client("SERVER::Invalid Command", client_address)
         print(f"Invalid command from {client_address}: {message}")
-#------------------------------------------------------------------------------------#
 
 def UDP_start():
-    """Starts the UDP server and listens for incoming messages."""
-    print("Server is running and waiting for client requests...")
+    print(f"Server is running on {SERVER_IP}:{SERVER_PORT}...")
     while True:
         try:
             message, client_address = receive_message_from_client() 
-            
             thread = threading.Thread(target=handle_client, args=(client_address, message))
             thread.start()
-
         except Exception as e:
             print(f"Error handling client request: {e}")
 
