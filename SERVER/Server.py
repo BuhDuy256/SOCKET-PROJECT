@@ -28,15 +28,15 @@ server.bind(SERVER_ADDRESS)
 #------------------------------------------------------------------------------------#
 
 def convert_size(size_in_bytes):
-    """Converts a file size in bytes to a human-readable format."""
+    """Converts a file size in bytes to a human-readable format with integer values."""
     if size_in_bytes <= 0:
         return "0B"
     units = ["B", "KB", "MB", "GB", "TB", "PB"]
     i = 0
     while size_in_bytes >= 1024 and i < len(units) - 1:
-        size_in_bytes /= 1024.0
+        size_in_bytes //= 1024
         i += 1
-    return f"{size_in_bytes}.1f {units[i]}"
+    return f"{size_in_bytes} {units[i]}"
 
 def generate_checksum(data):
     return hashlib.md5(data).hexdigest()[:CHECKSUM_SIZE]
@@ -68,10 +68,6 @@ def send_downloaded_file_list(client_address):
         file_list_str.append(f"{file} {size_str} {file_size} {file_checksum}")
 
     message = "\n".join(file_list_str)
-    encoded_message = message.encode('utf-8')
-
-    if len(encoded_message) > MAX_UDP_PAYLOAD_SIZE:
-        raise ValueError("Message too large to send via a single UDP packet.")
 
     send_message_to_client(message, client_address)
 

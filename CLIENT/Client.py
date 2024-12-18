@@ -70,8 +70,7 @@ def split_into_chunks(total_size):
 
 def receive_downloaded_file_list():
     try:
-        data, server_address = client.recvfrom(MAX_UDP_PAYLOAD_SIZE)
-        file_list_str = data.decode('utf-8')
+        file_list_str = receive_message_from_server(client)
         file_list = []
 
         if file_list_str:
@@ -105,7 +104,7 @@ def display_file_list(file_list):
         print("No files available to download.")
         return
     for file in file_list:
-        print(f"{file['file_name']} {file['size_str']}{file['unit']} {file['actual_byte']} bytes {file['checksum']}")
+        print(f"{file['file_name']} {file['size_str']}{file['unit']}")
 
 #------------------------------------------------------------------------------------#
 
@@ -149,6 +148,18 @@ def mark_file_as_done(file_name):
 
 def generate_checksum(data):
     return hashlib.md5(data).hexdigest()[:CHECKSUM_SIZE]
+
+def generate_file_checksum(file_name):
+    md5_hash = hashlib.md5()
+    try:
+        with open(file_name, "rb") as f:
+            for chunk in iter(lambda: f.read(BUFFER_SIZE), b""):
+                md5_hash.update(chunk)
+        return md5_hash.hexdigest()
+    except FileNotFoundError:
+        return f"Error: File '{file_name}' not found."
+    except Exception as e:
+        return f"Error: {e}"
 
 def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
     data, _ = client_socket.recvfrom(HEADER_SIZE)
@@ -267,8 +278,15 @@ def download_file(file_name, file_list):
             for seq in sorted(chunk_data_dict.keys()):
                 file.write(chunk_data_dict[seq])
                 merge_bar.update(1)
+
+    server_file_checksum = file_info["checksum"]
+    new_file_checksum = generate_file_checksum(new_file_name)
     
-    print(f"File {file_name} downloaded and merged as {new_file_name} successfully.")
+    if (new_file_checksum == server_file_checksum):
+        print(f"File {file_name} downloaded and merged as {new_file_name} successfully.")
+    else:
+        print(f"Checksum mismatch for file {file_name}.")
+        os.remove(new_file_name)
 
 def scan_and_add_to_queue(file_queue):
     while True:
@@ -290,7 +308,7 @@ if __name__ == "__main__":
     send_message_to_server(CONNECT_MESSAGE, client)
     file_list = receive_downloaded_file_list()
     display_file_list(file_list)
-    download_file("overworld.mp3", file_list)
+    download_file("100MB.zip", file_list)
     send_message_to_server(DISCONNECT_MESSAGE, client)
     # try:
     #     file_queue = queue.Queue()
