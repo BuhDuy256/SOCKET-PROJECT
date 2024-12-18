@@ -105,7 +105,6 @@ def receive_downloaded_file_list():
 def display_file_list(file_list):
     print("Files available to download:")
     if not file_list:
-        print("No files available to download.")
         return
     for file in file_list:
         print(f"{file['file_name']} {file['size_str']}{file['unit']}")
@@ -329,8 +328,8 @@ def scan_and_add_to_queue_multiprocess(file_queue):
             if files_to_download:
                 for file_name in files_to_download:
                     file_queue.put(file_name)
-            else:
-                print("No files to download from input.txt")
+            # else:
+                # print("No files to download from input.txt")
             time.sleep(5)
     except Exception as e:
         print(f"Error in scan process: {e}")
