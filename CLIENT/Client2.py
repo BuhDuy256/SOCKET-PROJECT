@@ -83,6 +83,16 @@ def merge_files(file_name, num_parts):
                 output_file.write(pf.read())
             os.remove(part_file)
 
+<<<<<<< HEAD
+=======
+def main():
+    # Cấu hình
+    server_ip = socket.gethostbyname(socket.gethostname())       
+    server_port = 5000           
+    file_name = "100MB.zip" 
+    num_threads = 4              
+    
+>>>>>>> 736f115da3f6d8060ea0dcb1b9e934196717d059
 
 def download_file(server_ip, server_port, file_name):
     """
