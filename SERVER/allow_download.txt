@@ -6,3 +6,4 @@
 200MB.zip 200.00MB
 512MB.zip 512.00MB
 1GB.zip 1.00GB
+ThuyVi.pdf 1.00MB

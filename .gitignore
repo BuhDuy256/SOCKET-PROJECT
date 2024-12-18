@@ -1,5 +1,7 @@
 # Our ignore file for git
 *.zip
+*.docx
+*.
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

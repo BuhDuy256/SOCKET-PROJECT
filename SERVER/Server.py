@@ -1,6 +1,14 @@
 import socket
 import os
 import hashlib
+import threading
+import struct
+from concurrent.futures import ThreadPoolExecutor
+
+MAX_WORKERS = 10  # Limit number of threads to prevent server from crashing
+CHUNK_SIZE = 1024  # 1 KB
+SERVER_IP = socket.gethostbyname(socket.gethostname())
+SERVER_PORT = 12345
 
 def calculate_checksum(data):
     """
@@ -10,11 +18,11 @@ def calculate_checksum(data):
     hash_obj.update(data)
     return hash_obj.hexdigest()
 
-def handle_client(client_socket, file_path):
+def handle_client(client_socket):
     try:
         request = client_socket.recv(1024).decode()
         command, file_name, *args = request.strip().split()
-        
+
         if command == "SIZE":
             # Trả về kích thước tệp
             file_size = os.path.getsize(file_name)
@@ -26,37 +34,54 @@ def handle_client(client_socket, file_path):
             with open(file_name, "rb") as f:
                 f.seek(start)
                 while start < end:
-                    chunk_size = min(1024, end - start)
+                    chunk_size = min(CHUNK_SIZE, end - start)
                     data = f.read(chunk_size)
                     if not data:
                         break
                     
-                    # Tính giá trị CHECKSUM
+                    # Tính CHECKSUM cho chunk
                     checksum = calculate_checksum(data)
                     
-                    # Gửi dữ liệu và CHECKSUM
-                    client_socket.send(data)
-                    client_socket.send(checksum.encode())
+                    # Đóng gói: [dữ liệu_length (4 byte)][dữ liệu][CHECKSUM (64 byte)]
+                    packed_data = struct.pack(f"!I{len(data)}s64s", len(data), data, checksum.encode())
+                    client_socket.send(packed_data)
+
                     start += len(data)
+
+        elif command == "GET_CHUNK":
+            chunk_start = int(args[0])
+            chunk_size = int(args[1])
+            with open(file_name, "rb") as f:
+                f.seek(chunk_start)
+                data = f.read(chunk_size)
+                
+                # Tính CHECKSUM
+                checksum = calculate_checksum(data)
+                
+                # Đóng gói và gửi
+                packed_data = struct.pack(f"!I{len(data)}s64s", len(data), data, checksum.encode())
+                client_socket.send(packed_data)
+
     except Exception as e:
-        print(f"Lỗi server: {e}")
+        print(f"Error in handle_client: {e}")
     finally:
         client_socket.close()
 
+
+
+    
+
 def main():
-    server_ip = socket.gethostbyname(socket.gethostname())
-    server_port = 5000
-    file_path = "5MB.zip"
-
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((server_ip, server_port))
+    server_socket.bind((SERVER_IP, SERVER_PORT))
     server_socket.listen(5)
-    print(f"Server đang chạy tại {server_ip}:{server_port}...")
-
-    while True:
-        client_socket, addr = server_socket.accept()
-        print(f"Kết nối từ {addr}")
-        handle_client(client_socket, file_path)
-
+    print(f"Server đang chạy tại {SERVER_IP}:{SERVER_PORT}...")
+    
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        while True:
+            client_socket, addr = server_socket.accept()
+            print(f"Kết nối từ {addr}")
+            executor.submit(handle_client, client_socket)
+            
 if __name__ == "__main__":
     main()
