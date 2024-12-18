@@ -102,6 +102,7 @@ def receive_downloaded_file_list():
         return []
 
 def display_file_list(file_list):
+    print("Files available to download:")
     if not file_list:
         print("No files available to download.")
         return
@@ -182,7 +183,7 @@ def receive_chunk(file_name, expected_seq, chunk_size, client_socket):
 
     received_data = b""
     while len(received_data) < size:
-        part_data, _ = client_socket.recvfrom(BUFFER_SIZE)
+        part_data, _ = client_socket.recvfrom(min(BUFFER_SIZE, size - len(received_data)))
         received_data += part_data
 
     checksum_calculated = generate_checksum(received_data)
@@ -296,6 +297,8 @@ def scan_and_add_to_queue(file_queue):
         if files_to_download:
             for file_name in files_to_download:
                 file_queue.put(file_name)
+        else:
+            print("No files to download from input.txt")
 
         time.sleep(5)
 
