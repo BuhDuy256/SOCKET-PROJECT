@@ -350,45 +350,43 @@ def download_from_queue_multiprocess(file_queue, file_list):
         return
 
 if __name__ == "__main__":
-    # try:
+    try:
         signal.signal(signal.SIGINT, signal_handler)
 
         send_message_to_server(CONNECT_MESSAGE, client)
         file_list = receive_downloaded_file_list()
         display_file_list(file_list)
 
-        download_file("3.pdf", file_list)
+        file_queue = Queue()
+        scan_process = Process(target=scan_and_add_to_queue_multiprocess, args=(file_queue,), daemon=True)
+        download_process = Process(target=download_from_queue_multiprocess, args=(file_queue, file_list), daemon=True)
 
-    #     file_queue = Queue()
-    #     scan_process = Process(target=scan_and_add_to_queue_multiprocess, args=(file_queue,), daemon=True)
-    #     download_process = Process(target=download_from_queue_multiprocess, args=(file_queue, file_list), daemon=True)
+        scan_process.start()
+        download_process.start()
 
-    #     scan_process.start()
-    #     download_process.start()
+        while scan_process.is_alive() and download_process.is_alive():
+            time.sleep(0.1)
 
-    #     while scan_process.is_alive() and download_process.is_alive():
-    #         time.sleep(0.1)
+    except KeyboardInterrupt:
+        print("\nCtrl+C pressed! Terminating processes...")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+    finally:
+        if scan_process.is_alive():
+            scan_process.terminate()
+        if download_process.is_alive():
+            download_process.terminate()
 
-    # except KeyboardInterrupt:
-    #     print("\nCtrl+C pressed! Terminating processes...")
-    # except Exception as e:
-    #     print(f"Unexpected error: {e}")
-    # finally:
-    #     if scan_process.is_alive():
-    #         scan_process.terminate()
-    #     if download_process.is_alive():
-    #         download_process.terminate()
+        # print(f"Scan process exited with code: {scan_process.exitcode}")
+        # print(f"Download process exited with code: {download_process.exitcode}")
 
-    #     # print(f"Scan process exited with code: {scan_process.exitcode}")
-    #     # print(f"Download process exited with code: {download_process.exitcode}")
+        try:
+            client.close()
+        except Exception as close_error:
+            print(f"Error while closing socket: {close_error}")
 
-    #     try:
-    #         client.close()
-    #     except Exception as close_error:
-    #         print(f"Error while closing socket: {close_error}")
+        if scan_process.exitcode not in (0, None) or download_process.exitcode not in (0, None):
+            sys.exit(1)
 
-    #     if scan_process.exitcode not in (0, None) or download_process.exitcode not in (0, None):
-    #         sys.exit(1)
-
-    #     print("Exiting program.")
-    #     sys.exit(0)
+        print("Exiting program.")
+        sys.exit(0)
