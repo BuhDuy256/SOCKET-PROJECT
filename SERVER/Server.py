@@ -4,6 +4,7 @@ import socket
 import struct
 import hashlib
 import threading
+import random
 
 SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 12345
@@ -86,6 +87,15 @@ def receive_message_from_client():
 
 #------------------------------------------------------------------------------------#
 
+def introduce_bit_error(chunk_data):
+    if random.random() < 0.0001: # 0.01% chance of introducing an error
+        if len(chunk_data) > 0:
+            error_pos = random.randint(0, len(chunk_data) - 1)
+            chunk_data = bytearray(chunk_data)
+            chunk_data[error_pos] = random.randint(0, 255)
+            return bytes(chunk_data)
+    return chunk_data
+
 def send_chunk_file(client_address, file_name, start, end):
     try:
         with open(file_name, "rb") as file:
@@ -98,7 +108,8 @@ def send_chunk_file(client_address, file_name, start, end):
                     break
                 
                 checksum = generate_checksum(chunk_data)
-                packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data)
+                chunk_data_with_error = introduce_bit_error(chunk_data)
+                packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data_with_error)
                 server.sendto(packet, client_address)
                 start += len(chunk_data)
 
@@ -114,7 +125,8 @@ def send_chunk_file_no2(client_address, file_name, start, chunk_size):
             chunk_data = file.read(chunk_size)
             
             checksum = generate_checksum(chunk_data)
-            packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data)
+            chunk_data_with_error = introduce_bit_error(chunk_data)
+            packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data_with_error)
             server.sendto(packet, client_address)
         
     except FileNotFoundError:
