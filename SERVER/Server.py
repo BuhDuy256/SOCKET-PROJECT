@@ -86,23 +86,37 @@ def receive_message_from_client():
 
 #------------------------------------------------------------------------------------#
 
-def send_chunk_file(client_address, file_name, seq, chunk_size):
+def send_chunk_file(client_address, file_name, start, end):
     try:
         with open(file_name, "rb") as file:
-            file.seek(seq * chunk_size)
+            file.seek(start)
+            while (start < end):
+                chunk_size = min(BUFFER_SIZE, end - start)
+                chunk_data = file.read(chunk_size)
+
+                if not chunk_data:
+                    break
+                
+                checksum = generate_checksum(chunk_data)
+                packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data)
+                server.sendto(packet, client_address)
+                start += len(chunk_data)
+
+    except FileNotFoundError:
+        print(f"File {file_name} not found.")
+    except Exception as e:
+        print(f"[ERROR] Error sending chunk: {e}")
+
+def send_chunk_file_no2(client_address, file_name, start, chunk_size):
+    try:
+        with open(file_name, "rb") as file:
+            file.seek(start)
             chunk_data = file.read(chunk_size)
-            checksum = generate_checksum(chunk_data)
-            header = struct.pack("!I I 16s", seq, len(chunk_data), checksum.encode(ENCODE_FORMAT))
-            header = header.ljust(HEADER_SIZE, b'\x00')
             
-            server.sendto(header, client_address)
-
-            offset = 0
-            while offset < len(chunk_data):
-                part_data = chunk_data[offset:offset + min(BUFFER_SIZE, len(chunk_data) - offset)]
-                server.sendto(part_data, client_address)
-                offset += BUFFER_SIZE
-
+            checksum = generate_checksum(chunk_data)
+            packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data)
+            server.sendto(packet, client_address)
+        
     except FileNotFoundError:
         print(f"File {file_name} not found.")
     except Exception as e:
@@ -118,14 +132,25 @@ def handle_client(client_address, message):
         print(f"Client {client_address} disconnected.")
         return
 
+    elif message.startswith("GET_NO2"):
+        match = re.match(r"^GET_NO2 (\S+) (\d+) (\d+)$", message)
+        if match:
+            file_name = match.group(1)
+            start = int(match.group(2))
+            chunk_size = int(match.group(3))
+            
+            send_chunk_file_no2(client_address, file_name, start, chunk_size)
+        else:
+            print(f"Invalid GET_NO2 request format from {client_address}: {message}")
+
     elif message.startswith("GET"):
         match = re.match(r"^GET (\S+) (\d+) (\d+)$", message)
         if match:
             file_name = match.group(1)
-            seq = int(match.group(2))
-            size = int(match.group(3))
+            start = int(match.group(2))
+            end = int(match.group(3))
             
-            send_chunk_file(client_address, file_name, seq, size)
+            send_chunk_file(client_address, file_name, start, end)
         else:
             print(f"Invalid GET request format from {client_address}: {message}")
 
