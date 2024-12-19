@@ -177,36 +177,44 @@ def receive_chunk(file_name, start, end, client_socket):
 
         header_size = struct.calcsize(f"!I {CHECKSUM_SIZE}s")
         if len(packet) < header_size:
-            print("Error: Packet too small to contain header.")
+            # print("Error: Packet too small to contain header.")
             return None
 
         chunk_length, checksum = struct.unpack(f"!I {CHECKSUM_SIZE}s", packet[:header_size])
         chunk_data = packet[header_size:]
 
         if len(chunk_data) != chunk_length:
-            print("Error: Length of received chunk data does not match with chunk length in header.")
+            # print("Error: Length of received chunk data does not match with chunk length in header.")
             return None
 
         retries = 0
         while checksum.decode(ENCODE_FORMAT) != generate_checksum(chunk_data) and retries < 3 and not exit_event.is_set():
-            print(f"Checksum mismatch for chunk starting at {start + total_bytes_received}. Retrying...")
+            # print(f"Checksum mismatch for chunk starting at {start + total_bytes_received}. Retrying...")
             chunk_start = start + total_bytes_received
 
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as retry_client:
-                send_message_to_server(f"GET_NO2 {file_name} {chunk_start} {len(chunk_data)}", retry_client)
+                retry_client.settimeout(5)
 
-                retry_packet, addr = retry_client.recvfrom(MAX_UDP_PAYLOAD_SIZE)
+                try:
+                    send_message_to_server(f"GET_NO2 {file_name} {chunk_start} {len(chunk_data)}", retry_client)
+                    retry_packet, addr = retry_client.recvfrom(MAX_UDP_PAYLOAD_SIZE)
+                except socket.timeout:
+                    # print(f"Error: Timeout while receiving retry packet for chunk starting at {chunk_start}.")
+                    retries += 1
+                    continue
+
                 retry_header_size = struct.calcsize(f"!I {CHECKSUM_SIZE}s")
                 if len(retry_packet) < retry_header_size:
-                    print("Error: Packet too small during retry.")
+                    # print("Error: Packet too small during retry.")
                     return None
 
                 retry_chunk_length, checksum = struct.unpack(f"!I {CHECKSUM_SIZE}s", retry_packet[:retry_header_size])
                 chunk_data = retry_packet[retry_header_size:]
 
                 if len(chunk_data) != retry_chunk_length:
-                    print("Error: Length of received chunk data does not match with chunk length in header during retry.")
-                    return None
+                    # print("Error: Length of received chunk data does not match with chunk length in header during retry.")
+                    retries += 1
+                    continue 
 
             retries += 1
 
@@ -232,10 +240,6 @@ def download_chunk(file_name, start, end, max_retries=5):
                 return chunk_data
             else:
                 retries += 1
-                print(f"Retrying to download chunk {start}-{end}... (Attempt {retries}/{max_retries})")
-                time.sleep(5)
-
-        print(f"Error: Failed to download chunk {start}-{end} after {max_retries} retries.")
         return None
     finally:
         sub_client.close()
@@ -285,9 +289,11 @@ def download_file(file_name, file_list):
                                     chunk_data_dict[seq] = chunk_data
                                 download_bar.update(1)
                             else:
-                                print(f"Failed to download chunk {seq}. Retrying...")
+                                print(f"Failed to download chunk {seq}. Stopping download process...")
+                                raise ValueError(f"Chunk {seq} is None. Aborting file download.")
                         except Exception as e:
                             print(f"Error downloading chunk {seq}: {e}")
+                            raise
 
             with tqdm(total=len(chunks), desc=f"Merging {new_file_name}", unit="chunk") as merge_bar:
                 with open(new_file_name, "wb") as file:
@@ -306,16 +312,19 @@ def download_file(file_name, file_list):
                 print(f"Checksum mismatch for file {file_name}. Retrying...")
                 os.remove(new_file_name)
                 retries += 1
-                time.sleep(5)
+                time.sleep(0.1)
 
         except Exception as e:
             print(f"Error downloading file {file_name}, attempt {retries + 1}/{MAX_DOWNLOAD_FILE_RETRIES}: {e}")
             retries += 1
-            time.sleep(5)
+            time.sleep(0.1)
+            break
 
-    if retries == MAX_DOWNLOAD_FILE_RETRIES:
+    if retries == MAX_DOWNLOAD_FILE_RETRIES or len(chunk_data_dict) < len(chunks):
         print(f"Failed to download file {file_name} after {MAX_DOWNLOAD_FILE_RETRIES} attempts.")
         mark_file_as(file_name, "failed")
+        if os.path.exists(new_file_name):
+            os.remove(new_file_name)
 
 def signal_handler(sig, frame):
     print("Ctrl+C pressed! Exiting...")
