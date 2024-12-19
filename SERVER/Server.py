@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import socket
 import struct
 import hashlib
@@ -20,6 +21,9 @@ CONNECT_MESSAGE = '!CONNECT'
 
 BUFFER_SIZE = 4096
 MAX_UDP_PAYLOAD_SIZE = 65507
+
+CLIENT_ID_LENGTH = 26 # FIX
+DEFAULT_CLIENT_ID = '23127006_23127179_23127189'
 
 server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 server.bind(SERVER_ADDRESS)
@@ -52,7 +56,7 @@ def generate_file_checksum(file_name):
     except Exception as e:
         return f"Error: {e}"
 
-def send_downloaded_file_list(client_address):
+def send_downloaded_file_list(client_id, client_address):
     """Sends a list of downloadable files to the client."""
     server_dir = os.path.dirname(os.path.abspath(__file__))
     exclude_files = ['Server.py']
@@ -68,23 +72,32 @@ def send_downloaded_file_list(client_address):
 
     message = "\n".join(file_list_str)
 
-    send_message_to_client(message, client_address)
+    send_message_to_client(message, client_id, client_address)
 
-def send_message_to_client(message, client_address):
-    """Sends a message to the client."""
-    message = message.encode(ENCODE_FORMAT)
-    header = f"{len(message):<{HEADER_SIZE}}".encode(ENCODE_FORMAT)
-    server.sendto(header + message, client_address)
+def send_message_to_client(message, client_id, client_address):
+    client_id_encoded = client_id.encode(ENCODE_FORMAT)
+    message_encoded = message.encode(ENCODE_FORMAT)
+
+    combined_message = client_id_encoded + b"|" + message_encoded
+
+    header = f"{len(combined_message):<{HEADER_SIZE}}".encode(ENCODE_FORMAT)
+
+    server.sendto(header + combined_message, client_address)
 
 def receive_message_from_client():
-    """Receives a message from a client."""
     data, client_address = server.recvfrom(BUFFER_SIZE)
+    
     header = data[:HEADER_SIZE].decode(ENCODE_FORMAT).strip()
     if not header:
-        return None, client_address
+        return None, None, client_address
 
-    message = data[HEADER_SIZE:HEADER_SIZE + int(header)].decode(ENCODE_FORMAT)
-    return message, client_address
+    combined_message = data[HEADER_SIZE:HEADER_SIZE + int(header)]
+    client_id, message = combined_message.split(b"|", 1)
+
+    client_id = client_id.decode(ENCODE_FORMAT)
+    message = message.decode(ENCODE_FORMAT)
+
+    return message, client_id, client_address
 
 #------------------------------------------------------------------------------------#
 
@@ -139,24 +152,38 @@ def send_chunk_file_no2(client_address, file_name, start, chunk_size):
 
 lock = threading.Lock()
 current_client_ip = None
+current_client_id = DEFAULT_CLIENT_ID
 
-def handle_client(client_address, message):
+def generate_client_id():
+    while True:
+        part1 = random.randint(10000000, 99999999)
+        part2 = random.randint(10000000, 99999999)
+        part3 = random.randint(10000000, 99999999)
+
+        client_id = f"{part1}_{part2}_{part3}"
+
+        if client_id != DEFAULT_CLIENT_ID:
+            return client_id
+
+def handle_client(client_id, client_address, message):
     global current_client_ip
+    global current_client_id
 
-    client_ip, _ = client_address
+    client_ip, client_port = client_address
 
     if message == CONNECT_MESSAGE:
-        if current_client_ip is None:
-            with lock:
-                if current_client_ip is None:
-                    send_message_to_client("WELCOME", client_address)
-                    current_client_ip = client_ip
-                else:
-                    send_message_to_client("BUSY", client_address)
-                    return
+        with lock:
+            if current_client_ip is None and current_client_id is DEFAULT_CLIENT_ID:
+                new_client_id = generate_client_id()
+                send_message_to_client(new_client_id, client_id, client_address)
+                current_client_ip = client_ip
+                current_client_id = new_client_id
+            else:
+                send_message_to_client("BUSY", client_id, client_address)
+                return
 
     elif message == GET_DOWLOADED_FILES_LIST_MESSAGE:
-        send_downloaded_file_list(client_address)
+        send_downloaded_file_list(current_client_id, client_address)
 
     elif message == DISCONNECT_MESSAGE:
         print(f"Client {client_address} disconnected.")
@@ -191,8 +218,8 @@ def UDP_start():
     print(f"Server is running on {SERVER_IP}:{SERVER_PORT}...")
     while True:
         try:
-            message, client_address = receive_message_from_client() 
-            thread = threading.Thread(target=handle_client, args=(client_address, message))
+            message, client_id, client_address = receive_message_from_client() 
+            thread = threading.Thread(target=handle_client, args=(client_id, client_address, message))
             thread.start()
         except Exception as e:
             print(f"Error handling client request: {e}")

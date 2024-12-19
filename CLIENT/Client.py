@@ -28,27 +28,39 @@ MAX_DOWLOADED_CHUNKS_EACH_TIME = 100
 MAX_UDP_PAYLOAD_SIZE = 65507
 MAX_DOWNLOAD_FILE_RETRIES = 1
 
+CLIENT_ID_LENGTH = 26 # FIX
+DEFAULT_CLIENT_ID = '23127006_23127179_23127189'
+
 client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 exit_event = threading.Event()
 
 #------------------------------------------------------------------------------------#
 
-def send_message_to_server(message, client_socket):
-    """Sends a message to the SERVER"""
-    message = message.encode(ENCODE_FORMAT)
-    header = f"{len(message):<{HEADER_SIZE}}".encode(ENCODE_FORMAT)
-    client_socket.sendto(header + message, SERVER_ADDRESS)
+def send_message_to_server(message, client_id, client_socket):
+    client_id_encoded = client_id.encode(ENCODE_FORMAT)
+    message_encoded = message.encode(ENCODE_FORMAT)
+
+    combined_message = client_id_encoded + b"|" + message_encoded
+
+    header = f"{len(combined_message):<{HEADER_SIZE}}".encode(ENCODE_FORMAT)
+
+    client_socket.sendto(header + combined_message, SERVER_ADDRESS)
+
 
 def receive_message_from_server(client_socket):
-    """Receives a message from SERVER"""
     data, _ = client_socket.recvfrom(BUFFER_SIZE)
+
     header = data[:HEADER_SIZE].decode(ENCODE_FORMAT).strip()
-
     if not header:
-        return None
+        return None, None
 
-    message = data[HEADER_SIZE:HEADER_SIZE + int(header)].decode(ENCODE_FORMAT)
-    return message
+    combined_message = data[HEADER_SIZE:HEADER_SIZE + int(header)]
+    client_id, message = combined_message.split(b"|", 1)
+
+    client_id = client_id.decode(ENCODE_FORMAT)
+    message = message.decode(ENCODE_FORMAT)
+
+    return message, client_id
 
 def get_unique_filename(file_name):
     base_name, extension = os.path.splitext(file_name)
@@ -72,9 +84,14 @@ def split_into_chunks(total_size, max_chunk_size=MAX_CHUNK_SIZE):
 
     return chunks
 
-def receive_downloaded_file_list():
+def receive_downloaded_file_list(current_client_id):
     try:
-        file_list_str = receive_message_from_server(client)
+        file_list_str, client_id = receive_message_from_server(client)
+
+        if client_id != current_client_id:
+            print(f"Error: Client ID mismatch. Expected: {current_client_id}, Received: {client_id}")
+            return []
+
         file_list = []
 
         if file_list_str:
@@ -169,7 +186,7 @@ def generate_file_checksum(file_name):
     except Exception as e:
         return f"Error: {e}"
 
-def receive_chunk(file_name, start, end, client_socket):
+def receive_chunk(file_name, start, end, current_client_id, client_socket):
     total_bytes_received = 0
     received_data = b""
 
@@ -197,7 +214,7 @@ def receive_chunk(file_name, start, end, client_socket):
                 retry_client.settimeout(5)
 
                 try:
-                    send_message_to_server(f"GET_NO2 {file_name} {chunk_start} {len(chunk_data)}", retry_client)
+                    send_message_to_server(f"GET_NO2 {file_name} {chunk_start} {len(chunk_data)}", current_client_id, retry_client)
                     retry_packet, addr = retry_client.recvfrom(MAX_UDP_PAYLOAD_SIZE)
                 except socket.timeout:
                     # print(f"Error: Timeout while receiving retry packet for chunk starting at {chunk_start}.")
@@ -228,14 +245,14 @@ def receive_chunk(file_name, start, end, client_socket):
 
     return received_data
 
-def download_chunk(file_name, start, end, max_retries=5):
+def download_chunk(current_client_id, file_name, start, end, max_retries=5):
     sub_client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     retries = 0
 
     try:
         while retries < max_retries and not exit_event.is_set():
-            send_message_to_server(f"GET {file_name} {start} {end}", sub_client)
-            chunk_data = receive_chunk(file_name, start, end, sub_client)
+            send_message_to_server(f"GET {file_name} {start} {end}", current_client_id, sub_client)
+            chunk_data = receive_chunk(file_name, start, end, current_client_id, sub_client)
 
             if chunk_data:
                 return chunk_data
@@ -249,7 +266,7 @@ def download_chunk(file_name, start, end, max_retries=5):
 
 lock = threading.Lock()
 
-def download_file(file_name, file_list):
+def download_file(current_client_id, file_name, file_list):
     file_info = None
 
     for file in file_list:
@@ -278,7 +295,7 @@ def download_file(file_name, file_list):
             with tqdm(total=len(chunks), desc=f"Downloading {new_file_name}", unit="chunk") as download_bar:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DOWLOADED_CHUNKS_EACH_TIME) as executor:
                     futures = {
-                        executor.submit(download_chunk, file_name, start, end): seq
+                        executor.submit(download_chunk, current_client_id, file_name, start, end): seq
                         for seq, (start, end) in enumerate(chunks)
                     }
 
@@ -349,36 +366,43 @@ def scan_and_add_to_queue_multiprocess(file_queue):
         # print("Scan process interrupted.")
         return
 
-def download_from_queue_multiprocess(file_queue, file_list):
+def download_from_queue_multiprocess(current_client_id, file_queue, file_list):
     try:
         while True:
             if not file_queue.empty():
                 file_name = file_queue.get()
-                download_file(file_name, file_list)
+                download_file(current_client_id, file_name, file_list)
     except KeyboardInterrupt:
         # print("Download process interrupted.")
         return
 
-if __name__ == "__main__":
+def main():
+    scan_process = None
+    download_process = None
+    current_client_id = None
+
     try:
         signal.signal(signal.SIGINT, signal_handler)
 
-        send_message_to_server(CONNECT_MESSAGE, client)
-        response = receive_message_from_server(client)
+        send_message_to_server(CONNECT_MESSAGE, DEFAULT_CLIENT_ID, client)
+        response, client_id = receive_message_from_server(client)
 
         if response == "BUSY":
-            print(response)
+            print("Server is busy. Please try again later.")
             sys.exit(0)
-        # elif response == "Welcome!":
-        #     pass
+        else:
+            print("Connected to server.")
+            current_client_id = response
 
-        send_message_to_server(GET_DOWLOADED_FILES_LIST_MESSAGE, client)
-        file_list = receive_downloaded_file_list()
+        # print("Current client ID:", current_client_id)
+
+        send_message_to_server(GET_DOWLOADED_FILES_LIST_MESSAGE, current_client_id, client)
+        file_list = receive_downloaded_file_list(current_client_id)
         display_file_list(file_list)
 
         file_queue = Queue()
         scan_process = Process(target=scan_and_add_to_queue_multiprocess, args=(file_queue,), daemon=True)
-        download_process = Process(target=download_from_queue_multiprocess, args=(file_queue, file_list), daemon=True)
+        download_process = Process(target=download_from_queue_multiprocess, args=(current_client_id, file_queue, file_list), daemon=True)
 
         scan_process.start()
         download_process.start()
@@ -391,21 +415,19 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
-        if scan_process.is_alive():
+        if scan_process and scan_process.is_alive():
             scan_process.terminate()
-        if download_process.is_alive():
+        if download_process and download_process.is_alive():
             download_process.terminate()
 
-        # print(f"Scan process exited with code: {scan_process.exitcode}")
-        # print(f"Download process exited with code: {download_process.exitcode}")
-
         try:
-            client.close()
+            if client:
+                client.close()
         except Exception as close_error:
             print(f"Error while closing socket: {close_error}")
 
-        if scan_process.exitcode not in (0, None) or download_process.exitcode not in (0, None):
-            sys.exit(1)
-
         print("Exiting program.")
         sys.exit(0)
+
+if __name__ == "__main__":
+    main()
