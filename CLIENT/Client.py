@@ -119,7 +119,7 @@ def scan_input_txt():
     
     for i, line in enumerate(lines):
         file_name = line.strip()
-        if 'done' not in file_name and 'in progress' not in file_name and 'failed' not in file_name:
+        if file_name and 'done' not in file_name and 'in progress' not in file_name and 'failed' not in file_name:
             files_to_download.append((file_name, i))
 
     if not files_to_download:
@@ -258,6 +258,7 @@ def download_file(file_name, file_list):
 
     if not file_info:
         print(f"File {file_name} is not in the list.")
+        mark_file_as(file_name, "failed")
         return
 
     total_size = file_info["actual_byte"]
