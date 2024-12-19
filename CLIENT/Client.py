@@ -19,6 +19,7 @@ HEADER_SIZE = 64
 CHECKSUM_SIZE = 16
 
 DISCONNECT_MESSAGE = '!DISCONNECT'
+GET_DOWLOADED_FILES_LIST_MESSAGE = 'GET DOWLOADED FILES LIST'
 CONNECT_MESSAGE = '!CONNECT'
 
 BUFFER_SIZE = 4096
@@ -363,6 +364,15 @@ if __name__ == "__main__":
         signal.signal(signal.SIGINT, signal_handler)
 
         send_message_to_server(CONNECT_MESSAGE, client)
+        response = receive_message_from_server(client)
+
+        if response == "BUSY":
+            print(response)
+            sys.exit(0)
+        # elif response == "Welcome!":
+        #     pass
+
+        send_message_to_server(GET_DOWLOADED_FILES_LIST_MESSAGE, client)
         file_list = receive_downloaded_file_list()
         display_file_list(file_list)
 

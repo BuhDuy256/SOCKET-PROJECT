@@ -15,6 +15,7 @@ HEADER_SIZE = 64
 CHECKSUM_SIZE = 16
 
 DISCONNECT_MESSAGE = '!DISCONNECT'
+GET_DOWLOADED_FILES_LIST_MESSAGE = 'GET DOWLOADED FILES LIST'
 CONNECT_MESSAGE = '!CONNECT'
 
 BUFFER_SIZE = 4096
@@ -136,8 +137,25 @@ def send_chunk_file_no2(client_address, file_name, start, chunk_size):
 
 #------------------------------------------------------------------------------------#
 
+lock = threading.Lock()
+current_client_ip = None
+
 def handle_client(client_address, message):
+    global current_client_ip
+
+    client_ip, _ = client_address
+
     if message == CONNECT_MESSAGE:
+        if current_client_ip is None:
+            with lock:
+                if current_client_ip is None:
+                    send_message_to_client("WELCOME", client_address)
+                    current_client_ip = client_ip
+                else:
+                    send_message_to_client("BUSY", client_address)
+                    return
+
+    elif message == GET_DOWLOADED_FILES_LIST_MESSAGE:
         send_downloaded_file_list(client_address)
 
     elif message == DISCONNECT_MESSAGE:
