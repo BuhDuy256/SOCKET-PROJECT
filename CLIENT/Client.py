@@ -187,11 +187,14 @@ def receive_chunk(file_name, start, end, chunk_index, total_chunks, client_socke
             return None
 
         chunk_length, checksum = struct.unpack(f"!I {CHECKSUM_SIZE}s", header)
-        chunk_data = client_socket.recv(chunk_length)
+        chunk_data = b""
 
-        if len(chunk_data) != chunk_length:
-            return None
+        while (chunk_length - len(chunk_data)) > 0:
+            chunk_data += client_socket.recv(min(BUFFER_SIZE, chunk_length - len(chunk_data)))
         
+        if len(chunk_data) != chunk_length:
+            return None 
+
         if generate_checksum(chunk_data) != checksum.decode(ENCODE_FORMAT):
             return None
 
@@ -242,16 +245,17 @@ def download_file(file_name, file_list):
     
     chunk_data_dict = {}
 
-    for chunk_index, (start, end) in enumerate(chunks):
-        print(f"Downloading chunk {chunk_index + 1}/{total_chunks}...")
-        chunk_data = download_chunk(file_name, start, end, chunk_index, total_chunks, chunk_data_dict)
-
-        if chunk_data is None:
-            print(f"Error downloading chunk {chunk_index + 1}, stopping file download: {file_name}.")
-            mark_file_as(file_name, "failed")
-            return
-
-        chunk_data_dict[(start, end)] = chunk_data
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [
+            executor.submit(download_chunk, file_name, start, end, chunk_index, total_chunks, chunk_data_dict)
+            for chunk_index, (start, end) in enumerate(chunks)
+        ]
+        
+        for future in concurrent.futures.as_completed(futures):
+            if future.result() is None:
+                print(f"Error downloading a chunk, stopping file download: {file_name}.")
+                mark_file_as(file_name, "failed")
+                return
 
     if len(chunk_data_dict) != len(chunks):
         print(f"File {file_name} download failed due to missing chunks.")

@@ -16,7 +16,7 @@ CHECKSUM_SIZE = 16
 DISCONNECT_MESSAGE = '!DISCONNECT'
 CONNECT_MESSAGE = '!CONNECT'
 
-BUFFER_SIZE = 4096
+BUFFER_SIZE = 1024
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(SERVER_ADDRESS)
@@ -98,7 +98,7 @@ def send_chunk_file(conn, file_name, start, end):
                 checksum = generate_checksum(chunk_data)
                 packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data)
                 conn.sendall(packet)
-                
+
                 start += len(chunk_data)
 
     except FileNotFoundError:
