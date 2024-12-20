@@ -144,6 +144,7 @@ def TCP_start():
     while True:
         conn, addr = server.accept()
         thread = threading.Thread(target=handle_client, args=(conn, addr))
+        thread.daemon = True
         thread.start()
 
 if __name__ == "__main__":

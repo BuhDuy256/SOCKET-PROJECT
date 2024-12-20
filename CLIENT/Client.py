@@ -192,18 +192,6 @@ def receive_chunk(file_name, start, end, chunk_index, total_chunks, client_socke
         if len(chunk_data) != chunk_length:
             return None
 
-        retries = 0
-        while checksum.decode(ENCODE_FORMAT) != generate_checksum(chunk_data) and retries < 5:
-            retries += 1
-            send_message_to_server(f"GET_NO2 {file_name} {start + total_bytes_received} {len(chunk_data)}", client_socket)
-            header = client_socket.recv(header_size)
-            chunk_length, checksum = struct.unpack(f"!I {CHECKSUM_SIZE}s", header)
-            chunk_data = client_socket.recv(chunk_length)
-
-        if retries == 3:
-            print(f"Error: Failed to download chunk after 3 retries.")
-            return None
-
         received_data += chunk_data
         total_bytes_received += len(chunk_data)
         
