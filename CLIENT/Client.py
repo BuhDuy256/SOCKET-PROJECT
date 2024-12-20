@@ -22,12 +22,10 @@ DISCONNECT_MESSAGE = '!DISCONNECT'
 CONNECT_MESSAGE = '!CONNECT'
 
 BUFFER_SIZE = 4096
-MAX_CHUNK_SIZE = BUFFER_SIZE * 10
-MAX_DOWLOADED_CHUNKS_EACH_TIME = 100
-MAX_DOWNLOAD_FILE_RETRIES = 1
+NUM_CHUNKS = 4
 
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-exit_event = threading.Event()
+client.connect(SERVER_ADDRESS)
 
 #------------------------------------------------------------------------------------#
 
@@ -58,13 +56,13 @@ def get_unique_filename(file_name):
     
     return new_file_name
 
-def split_into_chunks(total_size, max_chunk_size=MAX_CHUNK_SIZE):
+def split_into_chunks(total_size, num_chunks=4):
     chunks = []
-    num_chunks = (total_size + max_chunk_size - 1) // max_chunk_size
+    chunk_size = total_size // num_chunks
 
     for i in range(num_chunks):
-        start = i * max_chunk_size
-        end = min((i + 1) * max_chunk_size, total_size)
+        start = i * chunk_size
+        end = (i + 1) * chunk_size if i < num_chunks - 1 else total_size
         chunks.append((start, end))
 
     return chunks
@@ -149,8 +147,6 @@ def mark_file_as(file_name, status):
     except Exception as e:
         print(f"An error occurred while marking file {file_name} as done: {e}")
 
-#------------------------------------------------------------------------------------#
-
 def generate_checksum(data):
     return hashlib.md5(data).hexdigest()[:CHECKSUM_SIZE]
 
@@ -166,11 +162,25 @@ def generate_file_checksum(file_name):
     except Exception as e:
         return f"Error: {e}"
 
-def receive_chunk(file_name, start, end, client_socket):
+def split_into_chunks(total_size, num_chunks=4):
+    chunks = []
+    chunk_size = total_size // num_chunks
+
+    for i in range(num_chunks):
+        start = i * chunk_size
+        end = (i + 1) * chunk_size if i < num_chunks - 1 else total_size
+        chunks.append((start, end))
+
+    return chunks
+
+def receive_chunk(file_name, start, end, chunk_index, total_chunks, client_socket):
     total_bytes_received = 0
     received_data = b""
-
-    while total_bytes_received < end - start and not exit_event.is_set():
+    
+    progress_bar = tqdm(total=end - start, unit='B', unit_scale=True, 
+                         desc=f"Downloading {file_name} chunk {chunk_index+1}/{total_chunks}")
+    
+    while total_bytes_received < end - start:
         header_size = struct.calcsize(f"!I {CHECKSUM_SIZE}s")
         header = client_socket.recv(header_size)
         if len(header) < header_size:
@@ -183,7 +193,7 @@ def receive_chunk(file_name, start, end, client_socket):
             return None
 
         retries = 0
-        while checksum.decode(ENCODE_FORMAT) != generate_checksum(chunk_data) and retries < 3 and not exit_event.is_set():
+        while checksum.decode(ENCODE_FORMAT) != generate_checksum(chunk_data) and retries < 5:
             retries += 1
             send_message_to_server(f"GET_NO2 {file_name} {start + total_bytes_received} {len(chunk_data)}", client_socket)
             header = client_socket.recv(header_size)
@@ -196,35 +206,86 @@ def receive_chunk(file_name, start, end, client_socket):
 
         received_data += chunk_data
         total_bytes_received += len(chunk_data)
+        
+        progress_bar.update(len(chunk_data))
 
+    progress_bar.close()
     return received_data
 
-def download_chunk(file_name, start, end, max_retries=5):
+def download_chunk(file_name, start, end, chunk_index, total_chunks, chunk_data_dict):
     sub_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sub_client.connect(SERVER_ADDRESS)
-    retries = 0
 
     try:
-        while retries < max_retries and not exit_event.is_set():
-            send_message_to_server(f"GET {file_name} {start} {end}", sub_client)
-            chunk_data = receive_chunk(file_name, start, end, sub_client)
+        send_message_to_server(f"GET {file_name} {start} {end}", sub_client)
+        chunk_data = receive_chunk(file_name, start, end, chunk_index, total_chunks, sub_client)
 
-            if chunk_data:
-                return chunk_data
-            else:
-                retries += 1
+        if chunk_data:
+            chunk_data_dict[(start, end)] = chunk_data
+            return chunk_data
         return None
     finally:
-        sub_client.close()
-
-#######################################################################################0
+        send_message_to_server(DISCONNECT_MESSAGE, sub_client)
 
 def download_file(file_name, file_list):
-    print(f"Downloading file: {file_name}")
+    file_info = None
+
+    for file in file_list:
+        if file["file_name"] == file_name:
+            file_info = file
+            break
+
+    if not file_info:
+        print(f"File {file_name} is not in the list.")
+        mark_file_as(file_name, "failed")
+        return
+    
+    total_size = file_info["actual_byte"]
+    print("Total size of the file:", total_size)
+
+    new_file_name = get_unique_filename(file_name)
+    print(f"Saving file as: {new_file_name}")
+
+    chunks = split_into_chunks(total_size)
+    total_chunks = len(chunks)
+    
+    chunk_data_dict = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [
+            executor.submit(download_chunk, file_name, start, end, chunk_index, total_chunks, chunk_data_dict)
+            for chunk_index, (start, end) in enumerate(chunks)
+        ]
+        
+        for future in concurrent.futures.as_completed(futures):
+            if future.result() is None:
+                print(f"Error downloading a chunk, stopping file download: {file_name}.")
+                mark_file_as(file_name, "failed")
+                return
+
+    if len(chunk_data_dict) != len(chunks):
+        print(f"File {file_name} download failed due to missing chunks.")
+        mark_file_as(file_name, "failed")
+        return
+
+    combined_data = b''.join(chunk_data_dict[(start, end)] for start, end in chunks)
+    
+    with open(new_file_name, 'wb') as f:
+        f.write(combined_data)
+    print(f"File {file_name} downloaded and saved as {new_file_name}")
+
+    server_info_checksum = file_info["checksum"]
+    new_file_checksum = generate_file_checksum(new_file_name)
+
+    if server_info_checksum == new_file_checksum:
+        print(f"Checksums match for file {file_name}.")
+        mark_file_as(file_name, "done")
+    else:
+        print(f"Checksums do not match for file {file_name}.")
+        mark_file_as(file_name, "failed")
 
 def signal_handler(sig, frame):
     print("Ctrl+C pressed! Exiting...")
-    exit_event.set()
 
 def scan_and_add_to_queue_multiprocess(file_queue):
     try:
@@ -233,24 +294,20 @@ def scan_and_add_to_queue_multiprocess(file_queue):
             if files_to_download:
                 for file_name in files_to_download:
                     file_queue.put(file_name)
-            # else:
-                # print("No files to download from input.txt")
             time.sleep(5)
     except Exception as e:
         print(f"Error in scan process: {e}")
         raise
     except KeyboardInterrupt:
-        # print("Scan process interrupted.")
         return
 
-def download_from_queue_multiprocess(current_client_id, file_queue, file_list):
+def download_from_queue_multiprocess(file_queue, file_list):
     try:
         while True:
             if not file_queue.empty():
                 file_name = file_queue.get()
                 download_file(file_name, file_list)
     except KeyboardInterrupt:
-        # print("Download process interrupted.")
         return
 
 def main():
@@ -258,8 +315,6 @@ def main():
     download_process = None
     try:
         signal.signal(signal.SIGINT, signal_handler)
-        
-        client.connect(SERVER_ADDRESS)
         
         send_message_to_server(CONNECT_MESSAGE, client)
 

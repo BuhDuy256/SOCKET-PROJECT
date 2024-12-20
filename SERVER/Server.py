@@ -106,7 +106,6 @@ def send_chunk_file(conn, file_name, start, end):
         print(f"[ERROR] Error sending chunk: {e}")
 
 def handle_client(conn, addr):
-    print(f"[NEW CONNECTION] {addr} connected.")
     connected = True
     while connected:
         try:
@@ -118,7 +117,6 @@ def handle_client(conn, addr):
                 send_downloaded_file_list(conn)
 
             elif message == DISCONNECT_MESSAGE:
-                print(f"Client {addr} disconnected.")
                 connected = False
 
             elif message.startswith("GET"):
@@ -136,7 +134,6 @@ def handle_client(conn, addr):
                 print(f"Invalid command from {addr}: {message}")
 
         except Exception as e:
-            print(f"Error handling client {addr}: {e}")
             break
 
     conn.close()
@@ -148,7 +145,6 @@ def TCP_start():
         conn, addr = server.accept()
         thread = threading.Thread(target=handle_client, args=(conn, addr))
         thread.start()
-        print(f"[ACTIVE CONNECTIONS] {threading.active_count() - 1}")
 
 if __name__ == "__main__":
     TCP_start()
