@@ -12,7 +12,7 @@ from multiprocessing import Process, Queue
 
 CHUNK_SIZE = 1024  # 1 KB
 NUM_THREADS = 4
-SERVER_IP = socket.gethostbyname(socket.gethostname())
+SERVER_IP = "192.168.100.51"
 SERVER_PORT = 12345
 
 # ----------------- SIGNAL HANDLER -----------------

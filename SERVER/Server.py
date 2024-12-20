@@ -2,7 +2,8 @@ import socket
 import os
 import hashlib
 import struct
-from concurrent.futures import ThreadPoolExecutor
+import threading
+
 
 MAX_WORKERS = 16  # Limit number of threads to prevent server from crashing
 CHUNK_SIZE = 1024  # 1 KB
@@ -75,11 +76,11 @@ def main():
     server_socket.listen(5)
     print(f"Server is running on {SERVER_IP}:{SERVER_PORT}...")
     
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        while True:
-            client_socket, addr = server_socket.accept()
-            print(f"Connection from {addr}")
-            executor.submit(handle_client, client_socket)
-            
+    while True:
+        connection, address = server_socket.accept()
+        print(f"Connection from {address}")
+        thread = threading.Thread(target=handle_client, args=(connection,))
+        thread.start()
+
 if __name__ == "__main__":
     main()
