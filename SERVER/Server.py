@@ -187,6 +187,10 @@ def handle_client(client_id, client_address, message):
 
     elif message == DISCONNECT_MESSAGE:
         print(f"Client {client_address} disconnected.")
+        with lock:
+            if current_client_ip == client_ip and current_client_id == client_id:
+                current_client_ip = None
+                current_client_id = DEFAULT_CLIENT_ID
         return
 
     elif message.startswith("GET_NO2"):

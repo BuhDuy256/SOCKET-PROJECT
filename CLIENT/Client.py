@@ -389,7 +389,7 @@ def main():
 
         if response == "BUSY":
             print("Server is busy. Please try again later.")
-            sys.exit(0)
+            return
         else:
             print("Connected to server.")
             current_client_id = response
@@ -415,6 +415,8 @@ def main():
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
+        send_message_to_server(DISCONNECT_MESSAGE, current_client_id, client)
+
         if scan_process and scan_process.is_alive():
             scan_process.terminate()
         if download_process and download_process.is_alive():
