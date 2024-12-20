@@ -24,10 +24,9 @@ CONNECT_MESSAGE = '!CONNECT'
 BUFFER_SIZE = 4096
 MAX_CHUNK_SIZE = BUFFER_SIZE * 10
 MAX_DOWLOADED_CHUNKS_EACH_TIME = 100
-MAX_UDP_PAYLOAD_SIZE = 65507
 MAX_DOWNLOAD_FILE_RETRIES = 1
 
-client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 exit_event = threading.Event()
 
 #------------------------------------------------------------------------------------#
@@ -36,17 +35,16 @@ def send_message_to_server(message, client_socket):
     """Sends a message to the SERVER"""
     message = message.encode(ENCODE_FORMAT)
     header = f"{len(message):<{HEADER_SIZE}}".encode(ENCODE_FORMAT)
-    client_socket.sendto(header + message, SERVER_ADDRESS)
+    client_socket.sendall(header + message)
 
 def receive_message_from_server(client_socket):
     """Receives a message from SERVER"""
-    data, _ = client_socket.recvfrom(BUFFER_SIZE)
-    header = data[:HEADER_SIZE].decode(ENCODE_FORMAT).strip()
-
+    header = client_socket.recv(HEADER_SIZE).decode(ENCODE_FORMAT).strip()
     if not header:
         return None
 
-    message = data[HEADER_SIZE:HEADER_SIZE + int(header)].decode(ENCODE_FORMAT)
+    message_length = int(header)
+    message = client_socket.recv(message_length).decode(ENCODE_FORMAT)
     return message
 
 def get_unique_filename(file_name):
@@ -173,50 +171,24 @@ def receive_chunk(file_name, start, end, client_socket):
     received_data = b""
 
     while total_bytes_received < end - start and not exit_event.is_set():
-        packet, addr = client_socket.recvfrom(MAX_UDP_PAYLOAD_SIZE)
-
         header_size = struct.calcsize(f"!I {CHECKSUM_SIZE}s")
-        if len(packet) < header_size:
-            # print("Error: Packet too small to contain header.")
+        header = client_socket.recv(header_size)
+        if len(header) < header_size:
             return None
 
-        chunk_length, checksum = struct.unpack(f"!I {CHECKSUM_SIZE}s", packet[:header_size])
-        chunk_data = packet[header_size:]
+        chunk_length, checksum = struct.unpack(f"!I {CHECKSUM_SIZE}s", header)
+        chunk_data = client_socket.recv(chunk_length)
 
         if len(chunk_data) != chunk_length:
-            # print("Error: Length of received chunk data does not match with chunk length in header.")
             return None
 
         retries = 0
         while checksum.decode(ENCODE_FORMAT) != generate_checksum(chunk_data) and retries < 3 and not exit_event.is_set():
-            # print(f"Checksum mismatch for chunk starting at {start + total_bytes_received}. Retrying...")
-            chunk_start = start + total_bytes_received
-
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as retry_client:
-                retry_client.settimeout(5)
-
-                try:
-                    send_message_to_server(f"GET_NO2 {file_name} {chunk_start} {len(chunk_data)}", retry_client)
-                    retry_packet, addr = retry_client.recvfrom(MAX_UDP_PAYLOAD_SIZE)
-                except socket.timeout:
-                    # print(f"Error: Timeout while receiving retry packet for chunk starting at {chunk_start}.")
-                    retries += 1
-                    continue
-
-                retry_header_size = struct.calcsize(f"!I {CHECKSUM_SIZE}s")
-                if len(retry_packet) < retry_header_size:
-                    # print("Error: Packet too small during retry.")
-                    return None
-
-                retry_chunk_length, checksum = struct.unpack(f"!I {CHECKSUM_SIZE}s", retry_packet[:retry_header_size])
-                chunk_data = retry_packet[retry_header_size:]
-
-                if len(chunk_data) != retry_chunk_length:
-                    # print("Error: Length of received chunk data does not match with chunk length in header during retry.")
-                    retries += 1
-                    continue 
-
             retries += 1
+            send_message_to_server(f"GET_NO2 {file_name} {start + total_bytes_received} {len(chunk_data)}", client_socket)
+            header = client_socket.recv(header_size)
+            chunk_length, checksum = struct.unpack(f"!I {CHECKSUM_SIZE}s", header)
+            chunk_data = client_socket.recv(chunk_length)
 
         if retries == 3:
             print(f"Error: Failed to download chunk after 3 retries.")
@@ -228,7 +200,8 @@ def receive_chunk(file_name, start, end, client_socket):
     return received_data
 
 def download_chunk(file_name, start, end, max_retries=5):
-    sub_client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sub_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sub_client.connect(SERVER_ADDRESS)
     retries = 0
 
     try:
@@ -244,88 +217,10 @@ def download_chunk(file_name, start, end, max_retries=5):
     finally:
         sub_client.close()
 
-#------------------------------------------------------------------------------------#
-
-lock = threading.Lock()
+#######################################################################################0
 
 def download_file(file_name, file_list):
-    file_info = None
-
-    for file in file_list:
-        if file["file_name"] == file_name:
-            file_info = file
-            break
-
-    if not file_info:
-        print(f"File {file_name} is not in the list.")
-        mark_file_as(file_name, "failed")
-        return
-
-    total_size = file_info["actual_byte"]
-    print("Total size of the file:", total_size)
-
-    new_file_name = get_unique_filename(file_name)
-    print(f"Saving file as: {new_file_name}")
-
-    chunks = split_into_chunks(total_size)
-
-    retries = 0
-    while retries < MAX_DOWNLOAD_FILE_RETRIES and not exit_event.is_set():
-        chunk_data_dict = {}
-
-        try:
-            with tqdm(total=len(chunks), desc=f"Downloading {new_file_name}", unit="chunk") as download_bar:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_DOWLOADED_CHUNKS_EACH_TIME) as executor:
-                    futures = {
-                        executor.submit(download_chunk, file_name, start, end): seq
-                        for seq, (start, end) in enumerate(chunks)
-                    }
-
-                    for future in concurrent.futures.as_completed(futures):
-                        seq = futures[future]
-                        try:
-                            chunk_data = future.result()
-                            if chunk_data is not None:
-                                with lock:
-                                    chunk_data_dict[seq] = chunk_data
-                                download_bar.update(1)
-                            else:
-                                print(f"Failed to download chunk {seq}. Stopping download process...")
-                                raise ValueError(f"Chunk {seq} is None. Aborting file download.")
-                        except Exception as e:
-                            print(f"Error downloading chunk {seq}: {e}")
-                            raise
-
-            with tqdm(total=len(chunks), desc=f"Merging {new_file_name}", unit="chunk") as merge_bar:
-                with open(new_file_name, "wb") as file:
-                    for seq in sorted(chunk_data_dict.keys()):
-                        file.write(chunk_data_dict[seq])
-                        merge_bar.update(1)
-
-            server_file_checksum = file_info["checksum"]
-            new_file_checksum = generate_file_checksum(new_file_name)
-
-            if new_file_checksum == server_file_checksum:
-                print(f"File {file_name} downloaded and merged as {new_file_name} successfully.")
-                mark_file_as(file_name, "done")
-                break
-            else:
-                print(f"Checksum mismatch for file {file_name}. Retrying...")
-                os.remove(new_file_name)
-                retries += 1
-                time.sleep(0.1)
-
-        except Exception as e:
-            print(f"Error downloading file {file_name}, attempt {retries + 1}/{MAX_DOWNLOAD_FILE_RETRIES}: {e}")
-            retries += 1
-            time.sleep(0.1)
-            break
-
-    if retries == MAX_DOWNLOAD_FILE_RETRIES or len(chunk_data_dict) < len(chunks):
-        print(f"Failed to download file {file_name} after {MAX_DOWNLOAD_FILE_RETRIES} attempts.")
-        mark_file_as(file_name, "failed")
-        if os.path.exists(new_file_name):
-            os.remove(new_file_name)
+    print(f"Downloading file: {file_name}")
 
 def signal_handler(sig, frame):
     print("Ctrl+C pressed! Exiting...")
@@ -348,7 +243,7 @@ def scan_and_add_to_queue_multiprocess(file_queue):
         # print("Scan process interrupted.")
         return
 
-def download_from_queue_multiprocess(file_queue, file_list):
+def download_from_queue_multiprocess(current_client_id, file_queue, file_list):
     try:
         while True:
             if not file_queue.empty():
@@ -358,11 +253,16 @@ def download_from_queue_multiprocess(file_queue, file_list):
         # print("Download process interrupted.")
         return
 
-if __name__ == "__main__":
+def main():
+    scan_process = None
+    download_process = None
     try:
         signal.signal(signal.SIGINT, signal_handler)
-
+        
+        client.connect(SERVER_ADDRESS)
+        
         send_message_to_server(CONNECT_MESSAGE, client)
+
         file_list = receive_downloaded_file_list()
         display_file_list(file_list)
 
@@ -381,21 +281,22 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Unexpected error: {e}")
     finally:
-        if scan_process.is_alive():
+        send_message_to_server(DISCONNECT_MESSAGE, client)
+
+        if scan_process and scan_process.is_alive():
             scan_process.terminate()
-        if download_process.is_alive():
+        if download_process and download_process.is_alive():
             download_process.terminate()
 
-        # print(f"Scan process exited with code: {scan_process.exitcode}")
-        # print(f"Download process exited with code: {download_process.exitcode}")
-
         try:
-            client.close()
+            if client:
+                client.close()
         except Exception as close_error:
             print(f"Error while closing socket: {close_error}")
 
-        if scan_process.exitcode not in (0, None) or download_process.exitcode not in (0, None):
-            sys.exit(1)
-
         print("Exiting program.")
         sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+
