@@ -92,8 +92,13 @@ def send_chunk_file(conn, file_name, start, end):
                 chunk_size = min(BUFFER_SIZE, end - start)
                 chunk_data = file.read(chunk_size)
 
-                # .. Encode chunk data
+                if not chunk_data:
+                    break
 
+                checksum = generate_checksum(chunk_data)
+                packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data)
+                conn.sendall(packet)
+                
                 start += len(chunk_data)
 
     except FileNotFoundError:
