@@ -191,6 +191,9 @@ def receive_chunk(file_name, start, end, chunk_index, total_chunks, client_socke
 
         if len(chunk_data) != chunk_length:
             return None
+        
+        if generate_checksum(chunk_data) != checksum.decode(ENCODE_FORMAT):
+            return None
 
         received_data += chunk_data
         total_bytes_received += len(chunk_data)
