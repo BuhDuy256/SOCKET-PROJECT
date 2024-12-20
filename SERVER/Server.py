@@ -1,11 +1,10 @@
 import socket
 import os
 import hashlib
-import threading
 import struct
 from concurrent.futures import ThreadPoolExecutor
 
-MAX_WORKERS = 10  # Limit number of threads to prevent server from crashing
+MAX_WORKERS = 16  # Limit number of threads to prevent server from crashing
 CHUNK_SIZE = 1024  # 1 KB
 SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 12345
@@ -44,7 +43,7 @@ def handle_client(client_socket):
                     
                     # Đóng gói: [dữ liệu_length (4 byte)][dữ liệu][CHECKSUM (64 byte)]
                     packed_data = struct.pack(f"!I{len(data)}s64s", len(data), data, checksum.encode())
-                    client_socket.send(packed_data)
+                    client_socket.sendall(packed_data)
 
                     start += len(data)
 
@@ -68,19 +67,18 @@ def handle_client(client_socket):
         client_socket.close()
 
 
-
     
 
 def main():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((SERVER_IP, SERVER_PORT))
     server_socket.listen(5)
-    print(f"Server đang chạy tại {SERVER_IP}:{SERVER_PORT}...")
+    print(f"Server is running on {SERVER_IP}:{SERVER_PORT}...")
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         while True:
             client_socket, addr = server_socket.accept()
-            print(f"Kết nối từ {addr}")
+            print(f"Connection from {addr}")
             executor.submit(handle_client, client_socket)
             
 if __name__ == "__main__":
