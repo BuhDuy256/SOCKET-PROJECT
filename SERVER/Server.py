@@ -122,8 +122,8 @@ def send_chunk_file(client_address, file_name, start, end):
                     break
                 
                 checksum = generate_checksum(chunk_data)
-                chunk_data_with_error = introduce_bit_error(chunk_data)
-                packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data_with_error)
+                # chunk_data_with_error = introduce_bit_error(chunk_data)
+                packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data)
                 server.sendto(packet, client_address)
                 start += len(chunk_data)
 
@@ -139,8 +139,8 @@ def send_chunk_file_no2(client_address, file_name, start, chunk_size):
             chunk_data = file.read(chunk_size)
             
             checksum = generate_checksum(chunk_data)
-            chunk_data_with_error = introduce_bit_error(chunk_data)
-            packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data_with_error)
+            # chunk_data_with_error = introduce_bit_error(chunk_data)
+            packet = struct.pack(f"!I {CHECKSUM_SIZE}s {len(chunk_data)}s", len(chunk_data), checksum.encode(ENCODE_FORMAT), chunk_data)
             server.sendto(packet, client_address)
         
     except FileNotFoundError:
