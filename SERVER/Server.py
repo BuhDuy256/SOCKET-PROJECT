@@ -16,7 +16,7 @@ CHECKSUM_SIZE = 16
 DISCONNECT_MESSAGE = '!DISCONNECT'
 CONNECT_MESSAGE = '!CONNECT'
 
-BUFFER_SIZE = 1024
+BUFFER_SIZE = 4096
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(SERVER_ADDRESS)
@@ -103,8 +103,8 @@ def send_chunk_file(conn, file_name, start, end):
 
     except FileNotFoundError:
         print(f"File {file_name} not found.")
-    except Exception as e:
-        print(f"[ERROR] Error sending chunk: {e}")
+    # except Exception as e:
+        # print(f"[ERROR] Error sending chunk: {e}")
 
 def handle_client(conn, addr):
     connected = True

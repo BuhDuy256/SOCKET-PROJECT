@@ -5,12 +5,13 @@ import signal
 import struct
 import socket
 import hashlib
+import socket
 import threading
 import concurrent.futures
 from tqdm import tqdm
 from multiprocessing import Process, Queue
 
-SERVER_IP = '192.168.100.51'
+SERVER_IP = socket.gethostbyname(socket.gethostname())
 SERVER_PORT = 12345
 SERVER_ADDRESS = (SERVER_IP, SERVER_PORT)
 
